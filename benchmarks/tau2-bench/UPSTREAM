@@ -1,0 +1,4 @@
+repo=https://github.com/sierra-research/tau2-bench.git
+commit=5ebebbe
+date=2026-06-10
+note='3 files: config.py (tracer + proxy base), runner/batch.py, utils/llm_utils.py'

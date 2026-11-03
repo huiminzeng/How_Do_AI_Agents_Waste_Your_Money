@@ -1,0 +1,4 @@
+repo=https://github.com/scaleapi/mcp-atlas.git
+commit=f24ba3f
+date=2026-08-03
+note='Makefile (SDK pin + runtime mounts), mcp_server_template.json, agent-eval.ts, completion-strategy.ts, litellm-strategy.ts, patches_runtime/wikipedia_client.py'

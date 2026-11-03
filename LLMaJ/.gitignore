@@ -1,0 +1,13 @@
+# output lives in ../artifacts (git-ignored there)
+work/
+# python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+# editor / manual-patch litter
+*.bak
+*.bak_*
+*.orig
+*.log
+.DS_Store

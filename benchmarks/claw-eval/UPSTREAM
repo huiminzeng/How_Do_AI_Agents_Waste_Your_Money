@@ -1,0 +1,4 @@
+repo=https://github.com/claw-eval/claw-eval.git
+commit=d3f02d4
+date=2026-05-17
+note='cli.py + providers/openai_compat.py (tracer, x-trace-meta) + config_proxy_smoke.yaml'

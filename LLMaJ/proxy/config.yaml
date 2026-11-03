@@ -1,0 +1,123 @@
+# LiteLLM config for the LLMaJ judges ONLY.
+#
+# Separate from the experiment proxy on purpose. That one
+# (proxy/llm_cost_tracker/proxy/config.yaml, port 4000) serves the agent
+# runs whose traces are being judged; its config and its recorded format are
+# not to be touched by judging. Nothing here can affect it: different file, different port,
+# different trace root (artifacts/llmaj/judge_spend/, not artifacts/trajectories/).
+#
+# Model names are the judge_id that ends up in every output path, so they state
+# the effort rather than hiding it behind a bare model name. Four runs of the
+# utility pass were made on an alias called `gemini-3.1-pro-low` without anyone
+# noticing it meant "thinking disabled".
+#
+# Parameters carried over from the experiment config, each measured rather than
+# guessed:
+#   * `openai/responses/` - gpt-5.6-* only answer on the responses route
+#   * `output_config: {effort}` - the shape opus-5-class models take. The older
+#     `thinking: {type: enabled, budget_tokens: N}` is what 4.x takes; they are
+#     not interchangeable
+#   * `cache_control_injection_points` - Anthropic caches NOTHING without them.
+#     One config block was the difference between a 0% and a 100% hit rate
+#   * `reasoning_effort` passed explicitly to Gemini - litellm injects
+#     `thinkingLevel: low` when it is absent, so "pass nothing, get the model
+#     default" is false through this proxy
+model_list:
+
+  # ---- Anthropic, first-party key --------------------------------------------
+  - model_name: opus-5-high
+    litellm_params:
+      model: anthropic/claude-opus-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+      output_config: {"effort": "high"}
+      cache_control_injection_points:
+        - location: message
+          role: system
+        - location: message
+          index: -1
+    model_info: {max_input_tokens: 200000}
+
+  - model_name: opus-5-low
+    litellm_params:
+      model: anthropic/claude-opus-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+      output_config: {"effort": "low"}
+      cache_control_injection_points:
+        - location: message
+          role: system
+        - location: message
+          index: -1
+    model_info: {max_input_tokens: 200000}
+
+  - model_name: sonnet-5-high
+    litellm_params:
+      model: anthropic/claude-sonnet-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+      output_config: {"effort": "high"}
+      cache_control_injection_points:
+        - location: message
+          role: system
+        - location: message
+          index: -1
+    model_info: {max_input_tokens: 200000}
+
+  # ---- OpenAI, first-party key -----------------------------------------------
+  - model_name: sol-high
+    litellm_params:
+      model: openai/responses/gpt-5.6-sol
+      api_base: https://api.openai.com/v1
+      api_key: os.environ/OPENAI_API_KEY
+      reasoning_effort: high
+
+  - model_name: sol-low
+    litellm_params:
+      model: openai/responses/gpt-5.6-sol
+      api_base: https://api.openai.com/v1
+      api_key: os.environ/OPENAI_API_KEY
+      reasoning_effort: low
+
+  # ---- Gemini, first-party key -----------------------------------------------
+  - model_name: gemini-pro-high
+    litellm_params:
+      model: gemini/gemini-3.1-pro-preview
+      api_key: os.environ/GEMINI_API_KEY
+      reasoning_effort: high
+
+  - model_name: gemini-pro-low
+    litellm_params:
+      model: gemini/gemini-3.1-pro-preview
+      api_key: os.environ/GEMINI_API_KEY
+      reasoning_effort: low
+
+  # ---- Moonshot kimi-k3 ------------------------------------------------------
+  # The one judge whose deliberation can be READ: SGLang returns a raw chain of
+  # thought, split on </think>, where gemini returns a rewritten summary, sonnet
+  # an empty thinking block and sol a summary only on request. When two runs
+  # disagree about a verdict, this is the only judge that can show where they
+  # diverged.
+  #
+  # When it judges its own trajectories this is self-evaluation. Verified that the prompt names no model at all
+  # (10,913 characters, zero occurrences of "kimi", "k3" or "moonshot"), so any
+  # bias would have to come from recognising its own style - which is worth
+  # measuring against another judge on the same trajectories, not assuming.
+  - model_name: kimi-k3
+    litellm_params:
+      model: openai/kimi-k3
+      api_base: os.environ/KIMI_BASE_URL
+      api_key: os.environ/KIMI_API_KEY
+      extra_body: {"reasoning_effort": "max"}
+      allowed_openai_params: ["reasoning_effort"]
+    model_info: {max_input_tokens: 1048576}
+
+litellm_settings:
+  # Symlinked to the experiment proxy's logger, not copied: one implementation,
+  # so the recorded format cannot drift between the two proxies.
+  # The same TraceLogger the cost proxy runs, imported from proxy/
+  # (run.sh puts it on PYTHONPATH). One implementation, so judge traces have the
+  # same shape as agent traces.
+  callbacks: llm_cost_tracker.proxy.trace_logger.proxy_logger
+  drop_params: true
+
+general_settings:
+  # From the environment, never written into this file. run.sh reads .env.
+  master_key: os.environ/PROXY_API_KEY

@@ -1,0 +1,25 @@
+# secrets
+.env
+*.env
+!.env.example
+# everything the runs produce: trajectories and judge output (tens of GB in a real run)
+artifacts/
+# upstream checkouts made by benchmarks/*/setup.sh (pinned by UPSTREAM + the patch)
+benchmarks/*/src/
+benchmarks/*/outputs/
+benchmarks/*/SWE-bench/
+# python / node
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+node_modules/
+.pytest_cache/
+# editor litter
+*.bak
+*.bak_*
+*.orig
+.DS_Store
+# papers and other documents
+*.pdf

@@ -1,0 +1,15 @@
+[project]
+name = "llmaj"
+version = "0.1.0"
+description = "LLM-as-a-judge for agent trajectories: per-turn behaviour labels and per-trajectory token-waste verdicts, with the aggregation and report tooling behind the token-waste study."
+requires-python = ">=3.11"
+dependencies = [
+    "httpx", "numpy",
+    # exact token counts: the model's own tokenizer (kimi/terra via HF files, gpt via
+    # tiktoken, claude and gemini via their count-tokens endpoints)
+    "huggingface_hub", "tokenizers", "tiktoken", "anthropic", "google-genai",
+]
+
+
+[tool.setuptools.packages.find]
+include = ["llmaj*"]

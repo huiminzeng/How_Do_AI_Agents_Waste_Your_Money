@@ -1,0 +1,441 @@
+diff --git a/config_proxy_smoke.yaml b/config_proxy_smoke.yaml
+new file mode 100644
+index 0000000..81a4a9d
+--- /dev/null
++++ b/config_proxy_smoke.yaml
+@@ -0,0 +1,24 @@
++# Minimal config for proxy smoke tests (OpenAI GPT via LiteLLM proxy).
++# No reasoning_effort / temperature — GPT-5.x rejects unsupported params.
++#
++# api_key is the PROXY master key, not a first-party OpenAI key: base_url below is the
++# local cost proxy, which authenticates with general_settings.master_key.
++
++model:
++  api_key: ${PROXY_API_KEY}
++  base_url: http://localhost:4000/v1
++  model_id: gpt-5.2-chat
++  context_window: 128000
++  temperature: null
++
++# Judge stays disabled here. When enabling it, keep judge.base_url OFF the proxy origin
++# (e.g. https://api.openai.com/v1) so judge tokens are never counted as agent cost.
++judge:
++  enabled: false
++
++defaults:
++  trace_dir: traces
++  tasks_dir: tasks
++
++sandbox:
++  enabled: false
+diff --git a/src/claw_eval/cli.py b/src/claw_eval/cli.py
+index 15fccf5..d8086e6 100644
+--- a/src/claw_eval/cli.py
++++ b/src/claw_eval/cli.py
+@@ -11,6 +11,8 @@ import time
+ from concurrent.futures import ProcessPoolExecutor, as_completed
+ from pathlib import Path
+ 
++from llm_cost_tracker import tracer
++
+ # Ensure localhost traffic (mock services) bypasses any HTTP proxy,
+ # while external API requests (OpenRouter etc.) still go through proxy.
+ os.environ.setdefault("no_proxy", "localhost,127.0.0.1")
+@@ -328,6 +330,15 @@ def cmd_run(args: argparse.Namespace) -> None:
+     from .trace.reader import load_trace
+ 
+     cfg = load_config(args.config)
++    agent_base_url = args.base_url or cfg.model.base_url or os.environ.get("OPENAI_BASE_URL")
++    proxy_url = (
++        agent_base_url
++        or os.environ.get("TRACE_PROXY_BASE_URL")
++        or os.environ.get("OPENAI_BASE_URL")
++    )
++    if proxy_url:
++        os.environ["TRACE_PROXY_BASE_URL"] = proxy_url
++        tracer.install(proxy_url)
+ 
+     task_yaml = _resolve_task_yaml(args.task)
+     task = TaskDefinition.from_yaml(task_yaml)
+@@ -378,16 +389,24 @@ def cmd_run(args: argparse.Namespace) -> None:
+                     expected_files = len(task.sandbox_files) if task.sandbox_files else len(getattr(task.environment, "fixtures", []))
+                     if expected_files and n_injected < expected_files:
+                         print(f"[WARNING] inject_files: only {n_injected}/{expected_files} files injected")
+-                    trace_path = run_task(
+-                        task, provider,
+-                        trace_dir=trace_dir,
+-                        sandbox_tools=True,
+-                        sandbox_url=handle.sandbox_url,
+-                        prompt_cfg=cfg.prompt,
+-                        model_cfg=cfg.model,
+-                        media_cfg=cfg.media,
+-                        user_agent=_make_user_agent(cfg, task),
+-                    )
++                    with tracer.trace(
++                        benchmark="claw_eval",
++                        run_id=tracer.run_id_from_dir(trace_dir, env_var="CLAW_EVAL_RUN_ID"),
++                        unit_id=task.task_id,
++                        trial_id=f"t{i + 1}",
++                        model=provider.model_id,
++                        reset=True,
++                    ):
++                        trace_path = run_task(
++                            task, provider,
++                            trace_dir=trace_dir,
++                            sandbox_tools=True,
++                            sandbox_url=handle.sandbox_url,
++                            prompt_cfg=cfg.prompt,
++                            model_cfg=cfg.model,
++                            media_cfg=cfg.media,
++                            user_agent=_make_user_agent(cfg, task),
++                        )
+                     # Inject grader-only files (e.g. verify scripts with answers)
+                     # AFTER the agent loop so the agent cannot read them.
+                     n_grader = runner.inject_grader_files(handle, task, task_dir=str(task_yaml.parent))
+@@ -503,15 +522,23 @@ def cmd_run(args: argparse.Namespace) -> None:
+             if i > 0:
+                 svc.reset_all()
+ 
+-            trace_path = run_task(
+-                task, provider,
+-                trace_dir=trace_dir,
+-                sandbox_tools=sandbox_tools,
+-                prompt_cfg=cfg.prompt,
+-                model_cfg=cfg.model,
+-                media_cfg=cfg.media,
+-                user_agent=_make_user_agent(cfg, task),
+-            )
++            with tracer.trace(
++                benchmark="claw_eval",
++                run_id=tracer.run_id_from_dir(trace_dir, env_var="CLAW_EVAL_RUN_ID"),
++                unit_id=task.task_id,
++                trial_id=f"t{i + 1}",
++                model=provider.model_id,
++                reset=True,
++            ):
++                trace_path = run_task(
++                    task, provider,
++                    trace_dir=trace_dir,
++                    sandbox_tools=sandbox_tools,
++                    prompt_cfg=cfg.prompt,
++                    model_cfg=cfg.model,
++                    media_cfg=cfg.media,
++                    user_agent=_make_user_agent(cfg, task),
++                )
+             trace_paths_local.append(trace_path)
+             print(f"Trace: {trace_path}")
+ 
+@@ -587,6 +614,15 @@ def cmd_run_inner(args: argparse.Namespace) -> None:
+     from .trace.reader import load_trace
+ 
+     cfg = load_config(args.config)
++    agent_base_url = args.base_url or cfg.model.base_url or os.environ.get("OPENAI_BASE_URL")
++    proxy_url = (
++        agent_base_url
++        or os.environ.get("TRACE_PROXY_BASE_URL")
++        or os.environ.get("OPENAI_BASE_URL")
++    )
++    if proxy_url:
++        os.environ["TRACE_PROXY_BASE_URL"] = proxy_url
++        tracer.install(proxy_url)
+ 
+     task_yaml = _resolve_task_yaml(args.task)
+     task = TaskDefinition.from_yaml(task_yaml)
+@@ -612,15 +648,23 @@ def cmd_run_inner(args: argparse.Namespace) -> None:
+         trace_dir = _make_trace_dir(cfg.defaults.trace_dir, model_id)
+ 
+     with ServiceManager(task.services, mock_today=task.environment.mock_today):
+-        trace_path = run_task(
+-            task, provider,
+-            trace_dir=trace_dir,
+-            sandbox_tools=sandbox_tools,
+-            prompt_cfg=cfg.prompt,
+-            model_cfg=cfg.model,
+-            media_cfg=cfg.media,
+-            user_agent=_make_user_agent(cfg, task),
+-        )
++        with tracer.trace(
++            benchmark="claw_eval",
++            run_id=tracer.run_id_from_dir(trace_dir, env_var="CLAW_EVAL_RUN_ID"),
++            unit_id=task.task_id,
++            trial_id="t1",
++            model=provider.model_id,
++            reset=True,
++        ):
++            trace_path = run_task(
++                task, provider,
++                trace_dir=trace_dir,
++                sandbox_tools=sandbox_tools,
++                prompt_cfg=cfg.prompt,
++                model_cfg=cfg.model,
++                media_cfg=cfg.media,
++                user_agent=_make_user_agent(cfg, task),
++            )
+ 
+     print(f"Trace: {trace_path}")
+ 
+@@ -807,10 +851,19 @@ def _run_single_task(
+         task.apply_port_offset(port_offset)
+ 
+     cfg = load_config(config_path)
++    agent_base_url = base_url or cfg.model.base_url or os.environ.get("OPENAI_BASE_URL")
++    proxy_url = (
++        agent_base_url
++        or os.environ.get("TRACE_PROXY_BASE_URL")
++        or os.environ.get("OPENAI_BASE_URL")
++    )
++    if proxy_url:
++        os.environ["TRACE_PROXY_BASE_URL"] = proxy_url
++        tracer.install(proxy_url)
+     provider = OpenAICompatProvider(
+         model_id=model or cfg.model.model_id,
+         api_key=api_key or cfg.model.api_key,
+-        base_url=base_url or cfg.model.base_url,
++        base_url=agent_base_url,
+         extra_body=cfg.model.extra_body,
+         temperature=cfg.model.temperature,
+         reasoning_effort=cfg.model.reasoning_effort,
+@@ -864,16 +917,27 @@ def _run_single_task(
+                                 expected_files = len(task.sandbox_files) if task.sandbox_files else len(getattr(task.environment, "fixtures", []))
+                                 if expected_files and n_injected < expected_files:
+                                     print(f"[WARNING] inject_files: only {n_injected}/{expected_files} files injected")
+-                                trace_path = run_task(
+-                                    task, provider,
+-                                    trace_dir=trace_dir or cfg.defaults.trace_dir,
+-                                    sandbox_tools=True,
+-                                    sandbox_url=handle.sandbox_url,
+-                                    prompt_cfg=cfg.prompt,
+-                                    model_cfg=cfg.model,
+-                                    media_cfg=cfg.media,
+-                                    user_agent=_make_user_agent(cfg, task),
+-                                )
++                                with tracer.trace(
++                                    benchmark="claw_eval",
++                                    run_id=tracer.run_id_from_dir(
++                                        trace_dir or cfg.defaults.trace_dir,
++                                        env_var="CLAW_EVAL_RUN_ID",
++                                    ),
++                                    unit_id=task.task_id,
++                                    trial_id=f"t{i + 1}",
++                                    model=provider.model_id,
++                                    reset=True,
++                                ):
++                                    trace_path = run_task(
++                                        task, provider,
++                                        trace_dir=trace_dir or cfg.defaults.trace_dir,
++                                        sandbox_tools=True,
++                                        sandbox_url=handle.sandbox_url,
++                                        prompt_cfg=cfg.prompt,
++                                        model_cfg=cfg.model,
++                                        media_cfg=cfg.media,
++                                        user_agent=_make_user_agent(cfg, task),
++                                    )
+                                 n_grader = sandbox_runner.inject_grader_files(handle, task, task_dir=task_dir)
+                                 if task.sandbox_grader_files and n_grader < len(task.sandbox_grader_files):
+                                     print(f"[WARNING] inject_grader_files: only {n_grader}/{len(task.sandbox_grader_files)} files injected")
+@@ -882,15 +946,26 @@ def _run_single_task(
+                             finally:
+                                 sandbox_runner.stop_container(handle)
+                         else:
+-                            trace_path = run_task(
+-                                task, provider,
+-                                trace_dir=trace_dir or cfg.defaults.trace_dir,
+-                                sandbox_tools=sandbox_tools,
+-                                prompt_cfg=cfg.prompt,
+-                                model_cfg=cfg.model,
+-                                media_cfg=cfg.media,
+-                                user_agent=_make_user_agent(cfg, task),
+-                            )
++                            with tracer.trace(
++                                benchmark="claw_eval",
++                                run_id=tracer.run_id_from_dir(
++                                    trace_dir or cfg.defaults.trace_dir,
++                                    env_var="CLAW_EVAL_RUN_ID",
++                                ),
++                                unit_id=task.task_id,
++                                trial_id=f"t{i + 1}",
++                                model=provider.model_id,
++                                reset=True,
++                            ):
++                                trace_path = run_task(
++                                    task, provider,
++                                    trace_dir=trace_dir or cfg.defaults.trace_dir,
++                                    sandbox_tools=sandbox_tools,
++                                    prompt_cfg=cfg.prompt,
++                                    model_cfg=cfg.model,
++                                    media_cfg=cfg.media,
++                                    user_agent=_make_user_agent(cfg, task),
++                                )
+ 
+                         # Read local grader files from host (GT files, never touched by agent)
+                         if task.local_grader_files:
+@@ -1117,6 +1192,19 @@ def cmd_batch(args: argparse.Namespace) -> None:
+     """Run all (or filtered) tasks in parallel."""
+     _apply_proxy(getattr(args, "proxy", None))
+ 
++    from .config import load_config as _load_cfg_early
++
++    _cfg_early = _load_cfg_early(args.config)
++    _batch_base_url = args.base_url or _cfg_early.model.base_url or os.environ.get("OPENAI_BASE_URL")
++    proxy_url = (
++        _batch_base_url
++        or os.environ.get("TRACE_PROXY_BASE_URL")
++        or os.environ.get("OPENAI_BASE_URL")
++    )
++    if proxy_url:
++        os.environ["TRACE_PROXY_BASE_URL"] = proxy_url
++        tracer.install(proxy_url)
++
+     tasks_dir = Path(args.tasks_dir)
+     if not tasks_dir.exists():
+         print(f"Tasks directory not found: {tasks_dir}")
+@@ -1436,7 +1524,35 @@ def cmd_batch(args: argparse.Namespace) -> None:
+     print(f"{'='*60}\n")
+ 
+     errored = sum(1 for r in results if r.get("error"))
+-    avg_score_final = score_sum / finished_tasks if finished_tasks else 0.0
++
++    # Recompute the headline metrics from the merged `results`, never from the
++    # accumulators built during this invocation.
++    #
++    # `n_pass_hat`, `n_pass_at` and `score_sum` are incremented inside the task
++    # loop, so on a --rerun-errors or --continue run they cover only the tasks
++    # that executed THIS time. The summary then mixed two populations: `tasks`
++    # and `errored` counted the merged 161 while `pass_hat_3` counted the 18
++    # that were rerun. Measured on one kimi-k3 cell: the file said
++    # pass^3 = 12 and avg_score = 0.865 where the merged truth is 128 and
++    # 0.846. Nothing errors out and 12 is a plausible-looking number, so the
++    # only signal was that the pass count fell while the score rose.
++    _scored = [r for r in results if not r.get("error") and r.get("trials")]
++    finished_tasks = len(_scored)
++    n_pass_hat = sum(
++        1 for r in _scored if all(t.get("passed") for t in r["trials"])
++    )
++    n_pass_at = sum(
++        1 for r in _scored if any(t.get("passed") for t in r["trials"])
++    )
++    avg_score_final = (
++        sum(
++            sum(t["task_score"] for t in r["trials"]) / len(r["trials"])
++            for r in _scored
++        )
++        / finished_tasks
++        if finished_tasks
++        else 0.0
++    )
+     total_model_input_tokens = sum(
+         tr.get("model_input_tokens", tr.get("input_tokens", 0))
+         for r in results for tr in r.get("trials", [])
+diff --git a/src/claw_eval/runner/providers/openai_compat.py b/src/claw_eval/runner/providers/openai_compat.py
+index 046846e..73c99e6 100644
+--- a/src/claw_eval/runner/providers/openai_compat.py
++++ b/src/claw_eval/runner/providers/openai_compat.py
+@@ -18,6 +18,14 @@ from ...models.tool import ToolSpec
+ from ...models.trace import TokenUsage
+ 
+ 
++# Field name used to feed an assistant turn's own thinking back to the model.
++# "reasoning" is OpenRouter's spelling; the gateway that serves kimi-k3
++# rejects it outright ("unsupported parameter(s): `reasoning`", HTTP 400) and accepts
++# "reasoning_content", which is also what native DeepSeek/QwQ endpoints take and what
++# kimi-k3 itself returns. Measured against both spellings. Override with
++# CLAW_EVAL_REASONING_FIELD=reasoning if a run ever goes back through OpenRouter.
++_REASONING_FIELD = os.environ.get("CLAW_EVAL_REASONING_FIELD", "reasoning_content")
++
+ def _tool_spec_to_openai(spec: ToolSpec) -> dict[str, Any]:
+     """Convert our ToolSpec to OpenAI function calling format."""
+     return {
+@@ -217,9 +225,7 @@ def _message_to_openai(msg: Message) -> dict[str, Any] | list[dict[str, Any]]:
+             ],
+         }
+         if msg.reasoning_content:
+-            # Use "reasoning" for OpenRouter compatibility (also accepted as
+-            # "reasoning_content" by native DeepSeek/QwQ endpoints).
+-            d["reasoning"] = msg.reasoning_content
++            d[_REASONING_FIELD] = msg.reasoning_content
+         return d
+ 
+     # Simple text message
+@@ -228,7 +234,7 @@ def _message_to_openai(msg: Message) -> dict[str, Any] | list[dict[str, Any]]:
+         "content": _blocks_to_openai_content(msg),
+     }
+     if msg.reasoning_content:
+-        d["reasoning"] = msg.reasoning_content
++        d[_REASONING_FIELD] = msg.reasoning_content
+     return d
+ 
+ 
+@@ -291,10 +297,10 @@ class OpenAICompatProvider:
+ 
+         max_retries = 5
+         last_exc: Exception | None = None
+-        use_stream = True  # default
++        use_stream = True  # default; the proxy's litellm (>= 1.98) carries usage and reasoning counts on streams for every provider
+         for attempt in range(max_retries + 1):
+             try:
+-                if attempt <= 1 and not use_stream:
++                if not use_stream:
+                     response = self._call_without_stream(kwargs)
+                 else:
+                     response = self._call_with_stream(kwargs)
+@@ -365,12 +371,10 @@ class OpenAICompatProvider:
+         Assembles a synthetic response object that looks like a non-stream
+         response so the rest of the code path stays the same.
+         """
+-        stream_kwargs: dict[str, Any] = {"stream": True}
+-        # stream_options is OpenAI-specific; Anthropic/Claude endpoints reject it.
+-        model_lower = kwargs.get("model", "").lower()
+-        is_anthropic = any(s in model_lower for s in ("claude", "anthropic"))
+-        if not is_anthropic:
+-            stream_kwargs["stream_options"] = {"include_usage": True}
++        # Every request goes to the litellm cost proxy, which accepts stream_options for
++        # all providers and answers with a final usage chunk; without it an Anthropic
++        # stream's usage arrives as zeros in the client-side trace.
++        stream_kwargs: dict[str, Any] = {"stream": True, "stream_options": {"include_usage": True}}
+         stream = self.client.chat.completions.create(**kwargs, **stream_kwargs)
+ 
+         reasoning_parts: list[str] = []
+@@ -402,19 +406,23 @@ class OpenAICompatProvider:
+             if delta.content:
+                 content_parts.append(delta.content)
+ 
+-            # tool_calls (streamed incrementally)
++            # tool_calls (streamed incrementally), keyed by `index`. Every parallel call
++            # arrives with its own index; the proxy's litellm (>= 1.98) guarantees this on
++            # the Responses route too. _parse_response refuses arguments that do not parse,
++            # so a regression here fails loudly instead of scoring.
+             if delta.tool_calls:
+                 for tc_delta in delta.tool_calls:
+                     idx = tc_delta.index
+                     if idx not in tool_calls_by_index:
+                         tool_calls_by_index[idx] = {"id": "", "name": "", "arguments": ""}
++                    slot = tool_calls_by_index[idx]
+                     if tc_delta.id:
+-                        tool_calls_by_index[idx]["id"] = tc_delta.id
++                        slot["id"] = tc_delta.id
+                     if tc_delta.function:
+                         if tc_delta.function.name:
+-                            tool_calls_by_index[idx]["name"] = tc_delta.function.name
++                            slot["name"] = tc_delta.function.name
+                         if tc_delta.function.arguments:
+-                            tool_calls_by_index[idx]["arguments"] += tc_delta.function.arguments
++                            slot["arguments"] += tc_delta.function.arguments
+ 
+         if not has_any_choice:
+             raise RuntimeError("Model returned empty choices (choices=None or [])")
+@@ -505,6 +513,15 @@ class OpenAICompatProvider:
+                 try:
+                     args = json.loads(tc.function.arguments)
+                 except json.JSONDecodeError:
++                    # Never silent. This substitution is how a streaming or
++                    # translation fault turns into a plausible-looking score
++                    # instead of an error: empty arguments make the tool 422,
++                    # the model retries, and the episode dies at max_turns.
++                    print(
++                        f"[warn] tool call {tc.function.name}: arguments are not "
++                        f"valid JSON, substituting {{}} -- "
++                        f"{tc.function.arguments[:160]!r}"
++                    )
+                     args = {}
+                 parsed_tool_uses.append(ToolUseBlock(
+                     id=tc.id,

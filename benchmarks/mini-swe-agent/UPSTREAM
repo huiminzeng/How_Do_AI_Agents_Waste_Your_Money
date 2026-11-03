@@ -1,0 +1,4 @@
+repo=https://github.com/SWE-agent/mini-swe-agent.git
+commit=v2.4.2
+date=2026
+note='run/benchmarks/swebench.py + swebench_single.py (tracer) + swebench_nonet.yaml; SWE-bench evaluator pinned separately at SWE-bench/SWE-bench f7bbbb2, unmodified'

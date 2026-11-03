@@ -1,0 +1,129 @@
+diff --git a/src/tau2/config.py b/src/tau2/config.py
+index d8a8ace..525bca8 100644
+--- a/src/tau2/config.py
++++ b/src/tau2/config.py
+@@ -1,3 +1,14 @@
++import os
++
++# Untracked (non-agent) LLM calls: pin the first-party endpoint + key explicitly so they
++# bypass the cost proxy even when OPENAI_BASE_URL is exported for the traced agent.
++# OPENAI_DIRECT_API_KEY is preferred: run scripts repoint OPENAI_API_KEY at the proxy's
++# master key, so it is NOT the first-party key inside a traced run.
++_DIRECT_LLM_ARGS = {
++    "api_base": os.environ.get("OPENAI_DIRECT_BASE_URL", "https://api.openai.com/v1"),
++    "api_key": os.environ.get("OPENAI_DIRECT_API_KEY") or os.environ.get("OPENAI_API_KEY"),
++}
++
+ # =============================================================================
+ # SIMULATION DEFAULTS (overridable via CLI)
+ # =============================================================================
+@@ -21,13 +32,23 @@ DEFAULT_LLM_TEMPERATURE_USER = 0.0
+ DEFAULT_LLM_ARGS_AGENT = {"temperature": DEFAULT_LLM_TEMPERATURE_AGENT}
+ DEFAULT_LLM_ARGS_USER = {"temperature": DEFAULT_LLM_TEMPERATURE_USER}
+ 
+-DEFAULT_LLM_NL_ASSERTIONS = "gpt-4.1-2025-04-14"
+-DEFAULT_LLM_NL_ASSERTIONS_TEMPERATURE = 0.0
+-DEFAULT_LLM_NL_ASSERTIONS_ARGS = {"temperature": DEFAULT_LLM_NL_ASSERTIONS_TEMPERATURE}
++# Judge / env-interface LLMs are NOT the tested agent: their tokens must never be
++# cost-tracked. They are pinned to the first-party OpenAI endpoint so that a
++# process-wide OPENAI_BASE_URL (which points at the LiteLLM cost proxy for the agent)
++# cannot silently route them through it. See _DIRECT_LLM_ARGS below.
++DEFAULT_LLM_NL_ASSERTIONS = "gpt-5.5"
++DEFAULT_LLM_NL_ASSERTIONS_TEMPERATURE = 1.0
++DEFAULT_LLM_NL_ASSERTIONS_ARGS = {
++    "temperature": DEFAULT_LLM_NL_ASSERTIONS_TEMPERATURE,
++    **_DIRECT_LLM_ARGS,
++}
+ 
+ DEFAULT_LLM_ENV_INTERFACE = "gpt-4.1-2025-04-14"
+ DEFAULT_LLM_ENV_INTERFACE_TEMPERATURE = 0.0
+-DEFAULT_LLM_ENV_INTERFACE_ARGS = {"temperature": DEFAULT_LLM_ENV_INTERFACE_TEMPERATURE}
++DEFAULT_LLM_ENV_INTERFACE_ARGS = {
++    "temperature": DEFAULT_LLM_ENV_INTERFACE_TEMPERATURE,
++    **_DIRECT_LLM_ARGS,
++}
+ 
+ DEFAULT_LLM_EVAL_USER_SIMULATOR = "claude-opus-4-5"
+ 
+diff --git a/src/tau2/runner/batch.py b/src/tau2/runner/batch.py
+index d109df1..572099c 100644
+--- a/src/tau2/runner/batch.py
++++ b/src/tau2/runner/batch.py
+@@ -22,6 +22,7 @@ from pathlib import Path
+ from typing import Optional
+ 
+ from loguru import logger
++from llm_cost_tracker import tracer
+ 
+ from tau2.data_model.persona import InterruptTendency, PersonaConfig, Verbosity
+ from tau2.data_model.simulation import (
+@@ -338,6 +339,7 @@ class _TaskLogContext:
+ # =============================================================================
+ 
+ 
++@tracer.trace(workflow="tau2")
+ def run_single_task(
+     config: RunConfig,
+     task: Task,
+@@ -389,7 +391,16 @@ def run_single_task(
+         f"Agent: {config.effective_agent}, User: {config.effective_user}"
+     )
+ 
+-    with _TaskLogContext(simulation_id, save_dir, task, verbose_logs):
++    with tracer.trace(
++        benchmark="tau2",
++        run_id=tracer.run_id_from_dir(save_dir, env_var="TAU2_RUN_ID"),
++        domain=config.domain,
++        task_id=str(task.id),
++        seed=seed,
++        simulation_id=simulation_id,
++        model=str(config.effective_agent),
++        reset=True,
++    ), _TaskLogContext(simulation_id, save_dir, task, verbose_logs):
+         # Compute audio taps directory if enabled
+         taps_dir = None
+         if audio_taps and save_dir:
+@@ -500,6 +511,9 @@ def run_tasks(
+     # Set log level from config
+     logger.remove()
+     logger.add(lambda msg: print(msg), level=config.log_level)
++    proxy_url = os.environ.get("TRACE_PROXY_BASE_URL") or os.environ.get("OPENAI_BASE_URL")
++    if proxy_url:
++        tracer.install(proxy_url)
+ 
+     if len(tasks) == 0:
+         raise ValueError("No tasks to run")
+diff --git a/src/tau2/utils/llm_utils.py b/src/tau2/utils/llm_utils.py
+index e9d8156..ef0d087 100644
+--- a/src/tau2/utils/llm_utils.py
++++ b/src/tau2/utils/llm_utils.py
+@@ -62,6 +62,7 @@ llm_log_mode: ContextVar[str] = ContextVar("llm_log_mode", default="latest")
+ # litellm._turn_on_debug()
+ 
+ logging.getLogger("LiteLLM").setLevel(logging.WARNING)
++litellm.suppress_debug_info = True
+ 
+ if USE_LANGFUSE:
+     litellm.success_callback = ["langfuse"]
+@@ -125,8 +126,9 @@ def get_response_cost(response: ModelResponse) -> float:
+     )  # FIXME: Check Litellm, passing the model to completion_cost doesn't work.
+     try:
+         cost = completion_cost(completion_response=response)
+-    except Exception as e:
+-        logger.error(e)
++    except Exception:
++        # Some model aliases (e.g. custom proxy model names) may not be present in
++        # LiteLLM's pricing map. Treat as unknown-cost instead of noisy error logs.
+         return 0.0
+     return cost
+ 
+@@ -432,6 +434,9 @@ def generate(
+         "The response should be an assistant message"
+     )
+     content = response_choice.message.content
++    if isinstance(content, str) and "</think>" in content:
++        _, content = content.split("</think>", 1)
++        content = content.lstrip()
+     raw_tool_calls = response_choice.message.tool_calls or []
+     tool_calls = [
+         ToolCall(

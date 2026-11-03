@@ -1,0 +1,592 @@
+# CACHE_CONTROL — every Anthropic entry marks the LAST message (`index: -1`).
+#
+# On litellm 1.100.1 `role: user` marks EVERY user message, Anthropic caps a request at
+# 4 breakpoints, and during a tool-call streak the last marked message is an old user
+# turn, so the streak's new content is re-billed uncached every round (measured on a
+# fable tau2 smoke: uncached input 0% -> 34% of the prompt by round 12, cache writes
+# stopped, "Reached the provider limit of 4 cache breakpoints" in the log).
+# `index: -1` marks whatever the last message is; the tool_result problem that would
+# otherwise force `role: user` is fixed in litellm_patches.ANTHROPIC_TOOL_MESSAGE_MARKER (the
+# marker goes on the tool_result block, where Anthropic wants it). Two breakpoints per
+# request (system + last message), never near the cap.
+#
+# --- history of the role:user period ---
+#
+# `index: -1` means "the last message, whatever it is", and litellm's injection
+# hook writes the marker INTO that message's content. Where it lands depends on
+# the content's shape, which differs per harness:
+#
+#   tau2            tool message content is a plain string -> the marker goes on
+#                   the message itself. Works; measured 100% cache hit across
+#                   3,981 claude-sonnet-5 calls.
+#   mini-swe-agent  tool message content is a LIST of blocks -> the marker goes
+#                   inside content[0], and Anthropic rejects the request:
+#                   "cache_control may not be specified within
+#                   tool_result.content. Instead, place it directly on
+#                   tool_result." Every SWE-bench trajectory would die at round 2.
+#
+# `role: user` sidesteps the shape question entirely: a user message is a
+# message, never a tool_result, on either harness. Anthropic caches by PREFIX, so
+# a marker on the last user message still covers every earlier turn, tool results
+# included.
+#
+# What this changes for the finished cells: on tau2, 42% of calls end in a tool
+# result, and on those the marker now sits one message earlier. The cached PREFIX
+# is the same content either way, and that cell already measured 100% hit — so
+# this is where the marker goes, not what gets cached.
+#
+# REASONING TEXT — every Anthropic alias sends
+#   thinking: {"type": "adaptive", "display": "summarized"}
+# and every OpenAI Responses alias sends reasoning: {"effort": ..., "summary": "auto"}.
+# Both are display-only: thinking happens and is billed identically under every
+# setting (Anthropic), and the summary carries no token charge (OpenAI). Without them
+# a run records reasoning COUNTS for claude-sonnet-5 and gpt-5.6-terra but not one
+# character of reasoning text (Anthropic returns thinking blocks with an
+# empty string by default on 4.7+/5.x; OpenAI omits the summary unless asked).
+# Do NOT combine `reasoning_effort:` with `extra_body: {"reasoning": {...}}` on the
+# Responses route: the extra_body dict replaces the whole `reasoning` object and the
+# effort silently falls back to the provider default (measured: high -> medium).
+#
+# LiteLLM proxy config for LLM cost monitoring.
+#
+# Start with:
+#   proxy/setup.sh once, then ./run_proxy.sh from the repository root
+#
+# Point any OpenAI-compatible client at this proxy:
+#   export OPENAI_BASE_URL=http://localhost:4000/v1
+#   export OPENAI_API_KEY="$PROXY_API_KEY"     # the master_key below, from the repository root .env
+#
+# All calls are routed through the proxy, logged by trace_logger.py,
+# and prompt caching is auto-injected for supported models.
+
+model_list:
+  # =========================================================================
+  # OpenAI GPT models (first-party API)
+  # Pricing source: https://openai.com/api/pricing/
+  #
+  # api_base is pinned on EVERY entry on purpose. LiteLLM's OpenAI provider falls
+  # back to $OPENAI_BASE_URL when api_base is unset, and this proxy's own process
+  # inherits OPENAI_BASE_URL=http://localhost:4000/v1 from .env — which would make
+  # the proxy call itself in a loop. Do not remove these api_base lines.
+  # =========================================================================
+  - model_name: gpt-5-chat
+    litellm_params:
+      model: openai/gpt-5-chat
+      api_base: https://api.openai.com/v1
+      api_key: os.environ/OPENAI_API_KEY
+
+
+  - model_name: gpt-5.2
+    litellm_params:
+      model: openai/gpt-5.2
+      api_base: https://api.openai.com/v1
+      api_key: os.environ/OPENAI_API_KEY
+
+  # First-party equivalent of the old azure/gpt-5.2-chat deployment.
+  - model_name: gpt-5.2-chat
+    litellm_params:
+      model: openai/gpt-5.2-chat-latest
+      base_model: gpt-5.2-chat-latest
+      api_base: https://api.openai.com/v1
+      api_key: os.environ/OPENAI_API_KEY
+
+  # LiteLLM client aliases (tau2 uses openai/... with OPENAI_BASE_URL proxy).
+  - model_name: openai/gpt-5-chat
+    litellm_params:
+      model: openai/gpt-5-chat
+      api_base: https://api.openai.com/v1
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: openai/gpt-5.2-chat
+    litellm_params:
+      model: openai/gpt-5.2-chat-latest
+      base_model: gpt-5.2-chat-latest
+      api_base: https://api.openai.com/v1
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: gpt-5.4
+    litellm_params:
+      model: openai/gpt-5.4
+      api_base: https://api.openai.com/v1
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: gpt-5.5
+    litellm_params:
+      model: openai/gpt-5.5
+      api_base: https://api.openai.com/v1
+      api_key: os.environ/OPENAI_API_KEY
+
+  # GPT-5.6, with reasoning tokens recorded.
+  #
+  # **The `responses/` segment is load-bearing.** OpenAI refuses function tools together
+  # with reasoning on /v1/chat/completions for this family — "Function tools with
+  # reasoning_effort are not supported for gpt-5.6-terra in /v1/chat/completions" — and
+  # every benchmark here is tool-driven. That prefix makes LiteLLM translate to
+  # /v1/responses and translate the reply back, so the harness, this proxy and
+  # trace_logger all keep speaking chat/completions. Verified: tool_calls arrive in
+  # `choices[].message.tool_calls` and the reasoning count in
+  # `completion_tokens_details.reasoning_tokens`, exactly where the logger reads them.
+  #
+  # `reasoning_effort` is pinned because the default is *none* on this route: without it
+  # the model answers with zero reasoning tokens, which would silently produce a column
+  # of zeros rather than an error. Measured on one tool call: none 0, medium 17, high 15.
+  - model_name: gpt-5.6-terra
+    litellm_params:
+      model: openai/responses/gpt-5.6-terra
+      api_base: https://api.openai.com/v1
+      api_key: os.environ/OPENAI_API_KEY
+      reasoning: {"effort": "high", "summary": "auto"}
+  # Effort-paired siblings for terra, and the gpt-5.6-sol tier. Same `openai/responses/`
+  # route: verified that sol reports output_tokens_details.reasoning_tokens (61
+  # on a probe) and that litellm translates it into the standard slot the logger reads.
+  # sol is the pricier tier ($4/$20 vs terra's $2/$12).
+  # `openai/`-prefixed twins. tau2 and mini-swe-agent call
+  # litellm client-side, and litellm infers the provider from the model name: a bare
+  # `claude-sonnet-5` would be routed straight to Anthropic, bypassing this proxy entirely
+  # so no trace is ever written (the run looks fine — that is what makes it dangerous).
+  # The prefix says "speak OpenAI chat-completions to api_base", which is the proxy.
+  # Same trick as `openai/gemini-3.1-pro-preview`. Traces land under the resolved
+  # model name, so the arms do not split.
+  - model_name: openai/claude-sonnet-5
+    litellm_params:
+      model: anthropic/claude-sonnet-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+      # Cache markers: system + LAST message. See CACHE_CONTROL note at the top.
+      cache_control_injection_points:
+        - location: message
+          role: system
+        - location: message
+          index: -1
+      thinking: {"type": "adaptive", "display": "summarized"}
+      output_config: {"effort": "high"}
+    model_info:
+      max_input_tokens: 200000
+  - model_name: openai/claude-opus-5
+    litellm_params:
+      model: anthropic/claude-opus-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+      # Cache markers: system + LAST message. See CACHE_CONTROL note at the top.
+      cache_control_injection_points:
+        - location: message
+          role: system
+        - location: message
+          index: -1
+      thinking: {"type": "adaptive", "display": "summarized"}
+      output_config: {"effort": "high"}
+    model_info:
+      max_input_tokens: 200000
+  - model_name: openai/gpt-5.6-terra
+    litellm_params:
+      model: openai/responses/gpt-5.6-terra
+      api_base: https://api.openai.com/v1
+      api_key: os.environ/OPENAI_API_KEY
+      reasoning: {"effort": "high", "summary": "auto"}
+  - model_name: openai/gpt-5.6-sol
+    litellm_params:
+      model: openai/responses/gpt-5.6-sol
+      api_base: https://api.openai.com/v1
+      api_key: os.environ/OPENAI_API_KEY
+      reasoning: {"effort": "high", "summary": "auto"}
+  - model_name: gpt-5.6-terra-low
+    litellm_params:
+      model: openai/responses/gpt-5.6-terra
+      api_base: https://api.openai.com/v1
+      api_key: os.environ/OPENAI_API_KEY
+      reasoning: {"effort": "low", "summary": "auto"}
+  - model_name: gpt-5.6-sol
+    litellm_params:
+      model: openai/responses/gpt-5.6-sol
+      api_base: https://api.openai.com/v1
+      api_key: os.environ/OPENAI_API_KEY
+      reasoning: {"effort": "high", "summary": "auto"}
+  - model_name: gpt-5.6-sol-low
+    litellm_params:
+      model: openai/responses/gpt-5.6-sol
+      api_base: https://api.openai.com/v1
+      api_key: os.environ/OPENAI_API_KEY
+      reasoning: {"effort": "low", "summary": "auto"}
+
+  # =========================================================================
+  # gpt-6-astra. Same rules as gpt-5.6: /v1/chat/completions refuses
+  # function tools together with reasoning ("use /v1/responses"), so the `responses/`
+  # segment is load-bearing. Accepted efforts: low, medium, high, xhigh (none/minimal ->
+  # 400); provider default when nothing is sent is medium. `summary: "auto"` returns the
+  # reasoning summary items that trace_logger stores as reasoning_content; without it the
+  # count is recorded but no text. Prices $10 / $50 per M, cache read $1 (live price map).
+  # =========================================================================
+  - model_name: gpt-6-astra
+    litellm_params:
+      model: openai/responses/gpt-6-astra
+      api_base: https://api.openai.com/v1
+      api_key: os.environ/OPENAI_API_KEY
+      reasoning: {"effort": "high", "summary": "auto"}
+  - model_name: gpt-6-astra-low
+    litellm_params:
+      model: openai/responses/gpt-6-astra
+      api_base: https://api.openai.com/v1
+      api_key: os.environ/OPENAI_API_KEY
+      reasoning: {"effort": "low", "summary": "auto"}
+  - model_name: gpt-6-astra-medium
+    litellm_params:
+      model: openai/responses/gpt-6-astra
+      api_base: https://api.openai.com/v1
+      api_key: os.environ/OPENAI_API_KEY
+      reasoning: {"effort": "medium", "summary": "auto"}
+  - model_name: gpt-6-astra-xhigh
+    litellm_params:
+      model: openai/responses/gpt-6-astra
+      api_base: https://api.openai.com/v1
+      api_key: os.environ/OPENAI_API_KEY
+      reasoning: {"effort": "xhigh", "summary": "auto"}
+  # `openai/`-prefixed twin for tau2 and mini-swe-agent.
+  - model_name: openai/gpt-6-astra
+    litellm_params:
+      model: openai/responses/gpt-6-astra
+      api_base: https://api.openai.com/v1
+      api_key: os.environ/OPENAI_API_KEY
+      reasoning: {"effort": "high", "summary": "auto"}
+
+  # =========================================================================
+  # claude-fable-5-1. Direct anthropic/ route, like the sonnet-5 and opus-5 trios above,
+  # for the same reason: only the direct route carries the thinking count in the raw
+  # body. Facts measured against the API:
+  #   - thinking is always on; `thinking: {type: adaptive}` is the only accepted config and
+  #     `display: "summarized"` is what makes the thinking TEXT come back (empty otherwise).
+  #     effort low..xhigh and max are all accepted through litellm 1.100.1.
+  #   - tool_choice "any"/"tool" -> HTTP 400 (harnesses here use "auto"; tau2 verified).
+  #   - temperature is accepted (200), so the harnesses' temperature=1.0 is not a blocker.
+  #   - replaying the history WITHOUT its thinking blocks (tau2 drops them) returned 200 on
+  #     this account, with and without prior thinking; keep an eye on it - the API docs
+  #     reserve the right to 400 on edited history for newer accounts.
+  #   - 1M context; prices $10 / $50 per M, cache read $0.25, cache write $12.5 (LiteLLM's
+  #     live price map, which pricing.py fetches at proxy start).
+  # =========================================================================
+  - model_name: claude-fable-5-1
+    litellm_params:
+      model: anthropic/claude-fable-5-1
+      api_key: os.environ/ANTHROPIC_API_KEY
+      cache_control_injection_points:
+        - location: message
+          role: system
+        - location: message
+          index: -1
+      thinking: {"type": "adaptive", "display": "summarized"}
+      output_config: {"effort": "high"}
+    model_info:
+      max_input_tokens: 1000000
+  - model_name: claude-fable-5-1-low
+    litellm_params:
+      model: anthropic/claude-fable-5-1
+      api_key: os.environ/ANTHROPIC_API_KEY
+      cache_control_injection_points:
+        - location: message
+          role: system
+        - location: message
+          index: -1
+      thinking: {"type": "adaptive", "display": "summarized"}
+      output_config: {"effort": "low"}
+    model_info:
+      max_input_tokens: 1000000
+  - model_name: claude-fable-5-1-medium
+    litellm_params:
+      model: anthropic/claude-fable-5-1
+      api_key: os.environ/ANTHROPIC_API_KEY
+      cache_control_injection_points:
+        - location: message
+          role: system
+        - location: message
+          index: -1
+      thinking: {"type": "adaptive", "display": "summarized"}
+      output_config: {"effort": "medium"}
+    model_info:
+      max_input_tokens: 1000000
+  - model_name: claude-fable-5-1-xhigh
+    litellm_params:
+      model: anthropic/claude-fable-5-1
+      api_key: os.environ/ANTHROPIC_API_KEY
+      cache_control_injection_points:
+        - location: message
+          role: system
+        - location: message
+          index: -1
+      thinking: {"type": "adaptive", "display": "summarized"}
+      output_config: {"effort": "xhigh"}
+    model_info:
+      max_input_tokens: 1000000
+  - model_name: claude-fable-5-1-max
+    litellm_params:
+      model: anthropic/claude-fable-5-1
+      api_key: os.environ/ANTHROPIC_API_KEY
+      cache_control_injection_points:
+        - location: message
+          role: system
+        - location: message
+          index: -1
+      thinking: {"type": "adaptive", "display": "summarized"}
+      output_config: {"effort": "max"}
+    model_info:
+      max_input_tokens: 1000000
+  # `openai/`-prefixed twin for tau2 and mini-swe-agent (their litellm routes by name).
+  - model_name: openai/claude-fable-5-1
+    litellm_params:
+      model: anthropic/claude-fable-5-1
+      api_key: os.environ/ANTHROPIC_API_KEY
+      cache_control_injection_points:
+        - location: message
+          role: system
+        - location: message
+          index: -1
+      thinking: {"type": "adaptive", "display": "summarized"}
+      output_config: {"effort": "high"}
+    model_info:
+      max_input_tokens: 1000000
+
+  # --- Kimi K3 via an OpenAI-compatible gateway (KIMI_BASE_URL).
+  #
+  #     effort=max goes in extra_body, NOT as a plain `reasoning_effort:`. Measured on
+  #     a litellm proxy: a config-level reasoning_effort looks connected
+  #     but is dropped before the upstream call (no-param calls hit the server default,
+  #     28 reasoning tokens x3). extra_body is merged verbatim into every request body.
+  #     It does NOT override a client-sent reasoning_effort: measured on both
+  #     litellm 1.81.11 and 1.100.1, a client value replaces it in the outbound body. The
+  #     same holds for gemini and the Responses route; only Anthropic's alias-level
+  #     output_config beats the client. Harnesses must therefore send no effort param and
+  #     select the level by alias; every row's `request_params` records what went out.
+  #     allowed_openai_params is required too: litellm's validation does not know
+  #     kimi-k3 is a reasoning model and rejects the param without the whitelist.
+  #
+  #     temperature and max_tokens are deliberately NOT here: the harness sets them
+  #     per run, so every row's request_params records what it asked for.
+  # --- Gemini 3.1 Pro. The OpenAI-compatible shim is the other route to this model,
+  #     and that route does NOT report reasoning tokens: measured, the
+  #     /v1beta/openai endpoint returned completion_tokens 1 against total_tokens 130 —
+  #     121 tokens of thinking happened and no field carried the count. The native
+  #     `gemini/` route surfaces Gemini's thoughtsTokenCount as
+  #     completion_tokens_details.reasoning_tokens (measured: 186, with text_tokens 38
+  #     making up the rest of completion_tokens 224); token counts and prices are the
+  #     same on both routes.
+  - model_name: gemini-3.1-pro-preview
+    litellm_params:
+      model: gemini/gemini-3.1-pro-preview
+      api_key: os.environ/GEMINI_API_KEY
+      # Explicit on purpose: every gemini alias names its thinking level (this one
+      # high, -low/-high below) and no run depends on what a given litellm does when
+      # the field is absent (1.100.1 sends no thinkingConfig at all; 1.81.11 injected
+      # thinkingLevel=low, so numbers from the two versions are NOT comparable).
+      # `request_params.outbound.generationConfig.thinkingConfig` records the level per row.
+      reasoning_effort: high
+  # Same target under the `openai/`-prefixed name tau2 and mini-swe-agent pass.
+  - model_name: openai/gemini-3.1-pro-preview
+    litellm_params:
+      model: gemini/gemini-3.1-pro-preview
+      api_key: os.environ/GEMINI_API_KEY
+      reasoning_effort: high
+  # Effort-paired aliases for a future sweep, same pattern as the claude-opus-5 trio.
+  # NOT a substitute for the plain alias: measured, the unset default sits near high (reasoning 754 unset / 834 high / 378 low on one prompt),
+  # so adding an explicit effort would silently change the arm being compared. Use these
+  # only when the sweep is the point, and the trace's `model` field will name the arm.
+  - model_name: gemini-3.1-pro-high
+    litellm_params:
+      model: gemini/gemini-3.1-pro-preview
+      api_key: os.environ/GEMINI_API_KEY
+      reasoning_effort: high
+  - model_name: gemini-3.1-pro-low
+    litellm_params:
+      model: gemini/gemini-3.1-pro-preview
+      api_key: os.environ/GEMINI_API_KEY
+      reasoning_effort: low
+
+  # --- Claude with extended thinking. Effort-paired aliases, same shape as the k3 pair
+  #     elsewhere: one alias per effort
+  #     level, identical in every other respect, so an effort sweep changes only the
+  #     model name. The trace's `model` field then separates the arms by itself and no
+  #     harness argument has to be touched.
+  #
+  #     Three things are load-bearing here:
+  #     1. `anthropic/` direct, NOT bedrock. Bedrock never reports the thinking count at
+  #        any effort (measured: usage details come back None even with thinking on),
+  #        while the direct route carries it in the raw body, where trace_logger reads it.
+  #     2. `output_config: {effort: ...}` is the current API shape for opus-5-class
+  #        models; the older `thinking: {type: enabled, budget_tokens: N}` is what 4.x
+  #        takes. They are not interchangeable.
+  #     3. There is no `max` alias: litellm rejects effort=max outright ("Must be one of:
+  #        'high', 'medium', 'low'") even though the native SDK accepts it. `high` is the
+  #        documented default, which is what these runs use.
+  #
+  #     Measured, same prompt x2 per level: reasoning tokens 108/95 at low,
+  #     121/127 at medium, 140/122 at high — monotonic, and every call recorded.
+  # claude-sonnet-5, same effort trio. Verified: it thinks by default
+  # (output 343, thinking 56, content blocks ['thinking','text']).
+  - model_name: claude-sonnet-5
+    litellm_params:
+      model: anthropic/claude-sonnet-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+      # Cache markers: system + LAST message. See CACHE_CONTROL note at the top.
+      cache_control_injection_points:
+        - location: message
+          role: system
+        - location: message
+          index: -1
+      thinking: {"type": "adaptive", "display": "summarized"}
+      output_config: {"effort": "high"}
+    model_info:
+      max_input_tokens: 200000
+  - model_name: claude-sonnet-5-medium
+    litellm_params:
+      model: anthropic/claude-sonnet-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+      # Cache markers: system + LAST message. See CACHE_CONTROL note at the top.
+      cache_control_injection_points:
+        - location: message
+          role: system
+        - location: message
+          index: -1
+      thinking: {"type": "adaptive", "display": "summarized"}
+      output_config: {"effort": "medium"}
+    model_info:
+      max_input_tokens: 200000
+  - model_name: claude-sonnet-5-low
+    litellm_params:
+      model: anthropic/claude-sonnet-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+      # Cache markers: system + LAST message. See CACHE_CONTROL note at the top.
+      cache_control_injection_points:
+        - location: message
+          role: system
+        - location: message
+          index: -1
+      thinking: {"type": "adaptive", "display": "summarized"}
+      output_config: {"effort": "low"}
+    model_info:
+      max_input_tokens: 200000
+  - model_name: claude-opus-5
+    litellm_params:
+      model: anthropic/claude-opus-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+      # Cache markers: system + LAST message. See CACHE_CONTROL note at the top.
+      cache_control_injection_points:
+        - location: message
+          role: system
+        - location: message
+          index: -1
+      thinking: {"type": "adaptive", "display": "summarized"}
+      output_config: {"effort": "high"}
+    model_info:
+      max_input_tokens: 200000
+  - model_name: claude-opus-5-medium
+    litellm_params:
+      model: anthropic/claude-opus-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+      # Cache markers: system + LAST message. See CACHE_CONTROL note at the top.
+      cache_control_injection_points:
+        - location: message
+          role: system
+        - location: message
+          index: -1
+      thinking: {"type": "adaptive", "display": "summarized"}
+      output_config: {"effort": "medium"}
+    model_info:
+      max_input_tokens: 200000
+  - model_name: claude-opus-5-low
+    litellm_params:
+      model: anthropic/claude-opus-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+      # Cache markers: system + LAST message. See CACHE_CONTROL note at the top.
+      cache_control_injection_points:
+        - location: message
+          role: system
+        - location: message
+          index: -1
+      thinking: {"type": "adaptive", "display": "summarized"}
+      output_config: {"effort": "low"}
+    model_info:
+      max_input_tokens: 200000
+
+  - model_name: kimi-k3
+    litellm_params:
+      model: openai/kimi-k3
+      api_base: os.environ/KIMI_BASE_URL
+      api_key: os.environ/KIMI_API_KEY
+      extra_body: {"reasoning_effort": "max"}
+      allowed_openai_params: ["reasoning_effort"]
+    model_info:
+      max_input_tokens: 1048576
+  # Effort-paired aliases for the ablation, same target and gateway as kimi-k3.
+  - model_name: kimi-k3-low
+    litellm_params:
+      model: openai/kimi-k3
+      api_base: os.environ/KIMI_BASE_URL
+      api_key: os.environ/KIMI_API_KEY
+      extra_body: {"reasoning_effort": "low"}
+      allowed_openai_params: ["reasoning_effort"]
+    model_info:
+      max_input_tokens: 1048576
+  - model_name: kimi-k3-high
+    litellm_params:
+      model: openai/kimi-k3
+      api_base: os.environ/KIMI_BASE_URL
+      api_key: os.environ/KIMI_API_KEY
+      extra_body: {"reasoning_effort": "high"}
+      allowed_openai_params: ["reasoning_effort"]
+    model_info:
+      max_input_tokens: 1048576
+  # Same target, NO extra_body - for clients that speak the Anthropic wire.
+  # claudecode (Claude Code) posts /v1/messages and nothing else. The gateway's Anthropic
+  # route rejects `reasoning_effort` outright, so every alias above 400s on every call
+  # from it ("unsupported parameter(s): `reasoning_effort`"). Without extra_body the same
+  # request succeeds - verified on a throwaway proxy.
+  #
+  # Effort CANNOT be pinned on this alias, and that is a property of the route, not an
+  # oversight: kimi's effort knob does not exist on the Anthropic wire, and the Anthropic
+  # spelling `thinking: {type: enabled, effort: ...}` is ACCEPTED there and does nothing
+  # (none/low/high/max all returned the same reasoning length, ranges fully overlapping,
+  # while the same four arms separate 542/1282/1541 on chat/completions). Anything run on
+  # this alias runs at the gateway default and must be reported that way.
+  - model_name: kimi-k3-anthropic
+    litellm_params:
+      model: openai/kimi-k3
+      api_base: os.environ/KIMI_BASE_URL
+      api_key: os.environ/KIMI_API_KEY
+    model_info:
+      max_input_tokens: 1048576
+
+  # =========================================================================
+  # SGLang-hosted models (RadixAttention handles caching internally)
+  # =========================================================================
+  - model_name: Qwen3-30B-A3B-zeroshot
+    litellm_params:
+      model: openai/Qwen3-30B-A3B-zeroshot
+      api_base: os.environ/SGLANG_BASE_URL
+      api_key: "none"
+
+  - model_name: Qwen3-30B-A3B-Thinking-2507-tau2-consecutive-tool-penalty
+    litellm_params:
+      model: openai/Qwen3-30B-A3B-Thinking-2507-tau2-consecutive-tool-penalty
+      api_base: os.environ/SGLANG_BASE_URL
+      api_key: "none"
+
+  - model_name: Qwen3-30B-A3B-Thinking-2507
+    litellm_params:
+      model: openai/Qwen3-30B-A3B-Thinking-2507
+      api_base: os.environ/SGLANG_BASE_URL
+      api_key: "none"
+
+  - model_name: sentinel-qwen3-4b-thinking-rl
+    litellm_params:
+      model: openai/sentinel-qwen3-4b-thinking-rl
+      api_base: os.environ/SGLANG_BASE_URL
+      api_key: "none"
+
+  - model_name: Qwen3-4B-zeroshot
+    litellm_params:
+      model: openai/Qwen3-4B-zeroshot
+      api_base: os.environ/SGLANG_BASE_URL
+      api_key: "none"
+
+litellm_settings:
+  # Custom logger that writes each call under artifacts/trajectories/
+  callbacks: trace_logger.proxy_logger
+  drop_params: true
+
+general_settings:
+  master_key: os.environ/PROXY_API_KEY  # from .env; run_proxy.sh sources it
