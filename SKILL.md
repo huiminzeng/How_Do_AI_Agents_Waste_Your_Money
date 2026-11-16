@@ -29,7 +29,7 @@ Code: https://github.com/huiminzeng/How_Do_AI_Agents_Waste_Your_Money. The paper
 2. **The user** sends us the dataset name (by email, or in a Discussion on our dataset page).
 3. **We** run LLMaJ on it and send back the labeled trajectories (every span the judge marked,
    with its kind and reason) and the numbers: waste ratio, strict waste ratio, and the share by
-   kind. If the trajectories are from one of the supported benchmarks, the result is also
+   kind. **You** then replay the labeled trajectories as the walkthrough page (step 5). If the trajectories are from one of the supported benchmarks, the result is also
    listed on the project page's community table, as reported, under the user's name.
 
 ## Supported benchmarks (v1)
@@ -181,6 +181,21 @@ The labeled trajectories (the same JSONL, each turn with the judge's spans, thei
 reasons, and what the judge kept), the per-trajectory and per-cell numbers, and a line in the
 community table for supported benchmarks. Judging takes a few minutes per trajectory on our
 side; expect an answer within days, not minutes.
+
+## Step 5: replay the result as a walkthrough
+
+When the labeled file arrives, turn it into the walkthrough shown on the project page, so the
+user can watch their agent walk the task with every removable span highlighted:
+
+```bash
+cd How_Do_AI_Agents_Waste_Your_Money/LLMaJ
+python scripts_walkthrough.py /path/to/<benchmark>.labeled.jsonl
+```
+
+It prints the path of an `index.html` (under `artifacts/walkthrough/<name>/`); open it in a
+browser. It needs no API key and nothing but Python. One trajectory shows at a time, chosen
+from the menu at the top; `--limit N` keeps the page small for a large file. The floor plan
+knows the four supported benchmarks; another benchmark gets a generic plan.
 
 ## Rules
 

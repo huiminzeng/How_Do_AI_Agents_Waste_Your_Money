@@ -262,6 +262,7 @@ output tokens; they match up to small provider-specific formatting constants.
 | `scripts_judge_submission.py` | judge a submitted Hugging Face dataset end to end: download to `artifacts/submissions/<user>/<dataset>/input/`, import and judge under `work/`, write the labeled trajectories, `summary.json` and the community-table entry to `output/` |
 | `scripts_import_trajectories.py` | bring trajectories from any other harness into the judge's input tree (format in its docstring) |
 | `scripts_report_cell.py` | print one cell's success rate, waste ratio and strict waste ratio as one JSON object |
+| `scripts_walkthrough.py` | replay labeled trajectories as the project page's walkthrough: one folder with `index.html` (the transcript with every removable span highlighted, the floor plan of the task with the agent's route, the token curves) and `merged.json`; input is `<benchmark>.labeled.jsonl`, from a submission's `output/` or from the paper's dataset |
 | `proxy/run.sh`, `proxy/config.yaml` | the judge-side LiteLLM proxy (port 4500), so judge spend is recorded apart from the agents' spend |
 | `TAXONOMY.md` | the full definitions |
 
@@ -303,3 +304,9 @@ above. To have us run the judge instead, see the [project page](https://agenteco
 as an alternative. When a submission arrives as a Hugging Face dataset, `scripts_judge_submission.py <user>/<dataset>`
 does the whole thing on our side: one directory per user, one per dataset, with `input/`, `work/` and
 `output/` kept apart; the labeled trajectories in `output/` are what goes back to the submitter.
+
+The labeled trajectories replay as the walkthrough of the project page: `scripts_walkthrough.py
+<file>.labeled.jsonl` writes `artifacts/walkthrough/<name>/index.html`, which opens from disk and
+shows one trajectory at a time, the transcript with every removable span highlighted beside the
+floor plan of the task with the agent's route and the token curves. It knows the paper's four
+benchmarks; the paper's own labeled trajectories on Hugging Face replay the same way.

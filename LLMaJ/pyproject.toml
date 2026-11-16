@@ -13,3 +13,7 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 include = ["llmaj*"]
+
+[tool.setuptools.package-data]
+# the walkthrough page ships with the package
+llmaj = ["walkthrough/*.html"]

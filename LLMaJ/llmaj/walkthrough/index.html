@@ -1,0 +1,565 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Agent Walk</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20,400,0,0&display=swap">
+<style>
+/* One agent, one task, two views in step: where it went (the floor plan) and what it wrote (the transcript, with every removable span highlighted). Built by llmaj/walkthrough/build.py from a labeled.jsonl; the data is embedded as <script id=data>. */
+:root{
+  --bg:#F2F4F0; --fg:#1A1E1B; --muted:#5C645E; --rule:#D5D9D3; --tile:#FAFBF9;
+  --paper:#FAFBF9; --wall:#2A2F2B; --wing:#EEF1EC; --room:#FFFFFF; --room-fix:#E7EEF7;
+  --waste:#B9382B; --dup:#D9714E; --stuck:#8A2419; --pad:#C98A3A;
+  --agent:#2F8F5B; --think:#5E5BB0; --car-a:#2F8F5B; --car-b:#B9382B;
+  --m-detour:#F3D3CF; --m-dup:#F8DCCB; --m-restated:#EFC9C4; --m-padding:#F6E3C2;
+  --f0:#DCE7F5; --f1:#F8E7D4; --f2:#DFF0E4; --f3:#EDE3F5; --f4:#F6E3E3; --f5:#E2EEF0; --f6:#F3EFD9; --f7:#E9E9E9;
+  --sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif; --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#15181A; --fg:#E8EAE6; --muted:#9AA29C; --rule:#2E3335; --tile:#1C2022; --paper:#1C2022; --wall:#C9CFC9; --wing:#23282A; --room:#2B3133; --room-fix:#28364A;
+  --waste:#E06A58; --dup:#F0956F; --stuck:#F2847A; --pad:#E0A85C; --agent:#4FB07A; --think:#9B98E6; --car-a:#4FB07A; --car-b:#E06A58;
+  --m-detour:#4A2622; --m-dup:#4A2E20; --m-restated:#46201C; --m-padding:#4A3A1E;
+  --f0:#263447; --f1:#473826; --f2:#264331; --f3:#3A2F47; --f4:#472B2B; --f5:#26393D; --f6:#45402A; --f7:#303434; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#15181A; --fg:#E8EAE6; --muted:#9AA29C; --rule:#2E3335; --tile:#1C2022; --paper:#1C2022; --wall:#C9CFC9; --wing:#23282A; --room:#2B3133; --room-fix:#28364A;
+  --waste:#E06A58; --dup:#F0956F; --stuck:#F2847A; --pad:#E0A85C; --agent:#4FB07A; --think:#9B98E6; --car-a:#4FB07A; --car-b:#E06A58;
+  --m-detour:#4A2622; --m-dup:#4A2E20; --m-restated:#46201C; --m-padding:#4A3A1E;
+  --f0:#263447; --f1:#473826; --f2:#264331; --f3:#3A2F47; --f4:#472B2B; --f5:#26393D; --f6:#45402A; --f7:#303434; color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font-family:var(--sans);margin:0}
+.wrap{max-width:1500px;margin:0 auto;padding-block:22px 28px;padding-inline:16px}
+h1{font-size:1.5rem;font-weight:500;letter-spacing:-.01em;margin:0 0 4px;text-wrap:balance}
+.sub{color:var(--muted);margin:0 0 14px;font-size:.95rem;max-width:80ch}
+.controls{display:flex;flex-wrap:wrap;gap:10px;align-items:end;margin-bottom:16px}
+.controls label{display:flex;flex-direction:column;gap:4px;font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);min-width:0}
+.controls select{font:inherit;font-size:.9rem;color:var(--fg);background:var(--tile);border:1px solid var(--rule);border-radius:6px;padding:6px 8px;max-width:100%}
+.controls button{font:inherit;font-size:.9rem;padding:7px 14px;border-radius:6px;border:1px solid var(--fg);background:var(--fg);color:var(--bg);cursor:pointer}
+.controls button:focus-visible,.controls select:focus-visible{outline:2px solid var(--agent);outline-offset:2px}
+.head{display:flex;flex-wrap:wrap;gap:8px 18px;align-items:baseline;border-top:1px solid var(--rule);padding-top:12px;margin-bottom:10px}
+.name{font-size:1.15rem;font-weight:500;display:flex;align-items:center;gap:8px}
+.name .sw{width:12px;height:12px;border-radius:50%;background:var(--agent);display:inline-block}
+.chip{font-family:var(--mono);font-size:.68rem;letter-spacing:.04em;text-transform:uppercase;border:1px solid var(--rule);border-radius:4px;padding:2px 6px;color:var(--muted)}
+.stats{margin-left:auto;display:flex;gap:18px;font-family:var(--mono);font-size:.78rem;color:var(--muted)}
+.stats b{color:var(--fg);font-weight:500;font-variant-numeric:tabular-nums}
+.stage{display:grid;grid-template-columns:minmax(0,27fr) minmax(0,47fr) minmax(0,26fr);gap:14px;height:720px;min-height:0}
+@media (max-width:1000px){.stage{grid-template-columns:1fr;height:auto}.feed{height:520px}.col>.panel{flex:none}.panel svg{height:auto}}
+.col{display:flex;flex-direction:column;gap:10px;min-width:0;min-height:0}
+.col>.panel{flex:1 1 0;min-height:0;display:flex;flex-direction:column}
+.col>.plan-panel{flex:11 1 0}.col>.flow{flex:9 1 0}
+#planBox{flex:1;min-height:0;display:flex}
+.panel{background:var(--paper);border:1px solid var(--rule);border-radius:6px;min-width:0;padding:10px 12px 8px}
+.panel h2{font-size:.84rem;font-weight:600;letter-spacing:.01em;color:var(--fg);margin:0 0 6px;display:flex;gap:10px;align-items:baseline}
+.panel h2 small{font-weight:400;letter-spacing:0;text-transform:none;font-size:.74rem}
+.panel svg{width:100%;height:100%;flex:1;min-height:0;display:block}
+.plan{border:0;border-radius:4px}
+.plan{width:100%;height:auto;display:block;background:var(--paper);border:1px solid var(--rule);border-radius:6px}
+.plan text{font-family:var(--mono);fill:var(--fg)}
+.plan .wingl{font-family:var(--sans);font-size:11px;font-weight:600;fill:var(--fg);letter-spacing:.02em}
+.plan .ico{font-family:"Material Symbols Outlined";font-size:20px;fill:var(--fg);opacity:.5;font-variation-settings:"FILL" 0,"wght" 400,"GRAD" 0,"opsz" 20}
+.plan .wsub{font-family:var(--sans);font-size:9.5px;fill:var(--muted)}
+.plan .rooml{font-size:10px}
+.plan .trail,.plan .stalls{filter:url(#pglow)}
+.plan .callout rect{fill:var(--tile);stroke:var(--k);stroke-width:1.2}
+.plan .callout text{font-family:var(--sans);font-size:9.5px}
+.plan .callout .kt{font-family:var(--mono);font-weight:600;fill:var(--k);text-transform:uppercase;letter-spacing:.05em;font-size:8.5px}
+.plan .wingl{font-size:16px}.plan .wsub{font-size:13px}.plan .rooml{font-size:13px}.plan .ico{font-size:26px} /* after the floor plan’s own rules, so these win */
+.flow text{font-family:var(--sans);fill:var(--fg)}
+.flow .nm{font-size:19px;font-weight:600;letter-spacing:.02em}
+.flow .df{font-size:16px;fill:var(--muted)}
+.flow .ct{font-family:var(--mono);font-size:15px;fill:var(--muted)}
+.flow .ico{font-family:"Material Symbols Outlined";font-size:28px;font-variation-settings:"FILL" 0,"wght" 400,"GRAD" 0,"opsz" 20}
+.flow .mk{font-family:var(--mono);font-size:11.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase}
+.chart svg text{font-family:var(--mono);font-size:15px;fill:var(--muted)}
+.chart svg .lbl{font-family:var(--sans);font-size:15px;fill:var(--fg)}
+.chart svg .grid{stroke:var(--rule);stroke-width:1}
+.feed{background:var(--paper);border:1px solid var(--rule);border-radius:6px;overflow:hidden;position:relative;min-width:0;min-height:0}
+.feed h2{position:absolute;z-index:1;left:0;right:0;top:0;margin:0;background:var(--paper);padding:10px 12px 6px;font-size:.84rem;font-weight:600;letter-spacing:.01em;color:var(--fg);border-bottom:1px solid var(--rule)}
+.feed .roll{position:absolute;left:0;right:0;top:0;padding:42px 14px 400px;will-change:transform}
+.feed:after{content:"";position:absolute;left:0;right:0;bottom:0;height:70px;background:linear-gradient(transparent,var(--paper));pointer-events:none}
+.rd{border:1px solid var(--rule);border-radius:8px;background:var(--tile);margin-bottom:22px;padding:8px 12px 6px;display:none;height:var(--card,300px);box-sizing:border-box;overflow:hidden;position:relative}
+.rd:after{content:"";position:absolute;left:0;right:0;bottom:0;height:26px;background:linear-gradient(transparent,var(--tile));pointer-events:none}
+.rd.on{display:block}
+.rd{--cardbg:var(--tile);background:var(--cardbg);transition:border-color .25s,box-shadow .25s,opacity .35s,background .25s}
+.rd:after{background:linear-gradient(transparent,var(--cardbg))}
+.rd.on:not(.cur){opacity:.45}
+.rd.cur{--hi:var(--agent);--cardbg:color-mix(in srgb,var(--agent) 7%,var(--tile));opacity:1;border-color:var(--hi);box-shadow:0 0 0 3px color-mix(in srgb,var(--hi) 35%,transparent),0 12px 34px color-mix(in srgb,var(--hi) 32%,transparent)}
+.rd.cur.th{--hi:var(--think);--cardbg:color-mix(in srgb,var(--think) 8%,var(--tile))}
+.rd.cur:before{content:"";position:absolute;left:0;top:0;bottom:0;width:5px;background:var(--hi);border-radius:8px 0 0 8px}
+.blk.on{animation:blkIn .35s ease-out}
+@keyframes blkIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.blk.on mark{animation:markIn .7s ease-out}
+@keyframes markIn{0%{box-shadow:0 0 0 0 var(--k)}55%{box-shadow:0 0 0 5px color-mix(in srgb,var(--k) 45%,transparent)}100%{box-shadow:0 0 0 0 transparent}}
+.flow .edges{filter:url(#fglow)}
+.flow .edges path.live{stroke-opacity:1;stroke-dasharray:10 7}
+.flow .node.cur>rect:first-child{stroke-width:3.5;filter:url(#fglow)}
+.flow .node.cur>rect:first-child{fill:color-mix(in srgb,var(--agent) 12%,var(--wing))}
+.flow .node.cur.th>rect:first-child{fill:color-mix(in srgb,var(--think) 12%,var(--wing))}
+.rd header{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:baseline;margin-bottom:4px}
+.rd .n{font-family:var(--mono);font-size:.74rem;color:var(--muted);letter-spacing:.06em;text-transform:uppercase}
+.wk{font-family:var(--mono);font-size:.64rem;letter-spacing:.05em;font-weight:600;text-transform:uppercase;padding:0 6px;border-radius:3px;color:var(--k);border:1.5px solid var(--k);background:var(--m);white-space:nowrap}
+.rd header .wk{font-size:.66rem}
+.blk h4 .wk{font-weight:600;letter-spacing:.05em}
+.st{font-family:var(--mono);font-size:.68rem;letter-spacing:.06em;font-weight:600;padding:1px 7px;border-radius:3px;color:#fff;background:var(--s)}
+.rd .tok{margin-left:auto;font-family:var(--mono);font-size:.72rem;color:var(--muted);font-variant-numeric:tabular-nums}
+.rd .tok b{color:var(--waste);font-weight:500}
+.blk{display:none;border-top:1px dashed var(--rule);padding:6px 0 4px}
+.blk.on{display:block}
+.blk h4{margin:0 0 3px;font-size:.68rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600;display:flex;gap:8px;align-items:center}
+.blk h4 .ico{font-family:"Material Symbols Outlined";font-size:15px;font-variation-settings:"FILL" 0,"wght" 400,"GRAD" 0,"opsz" 20}
+.blk p,.blk pre{margin:0;font-size:.86rem;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere}
+.blk pre{font-family:var(--mono);font-size:.76rem;line-height:1.4}
+.think p{color:var(--fg);font-style:italic}
+.think h4{color:var(--think)}
+.res pre{color:var(--muted);font-size:.72rem}
+mark{background:var(--m);color:var(--fg);border-radius:2px;padding:0 1px;box-decoration-break:clone;-webkit-box-decoration-break:clone;border-bottom:2px solid var(--k)}
+mark .tag{font-family:var(--mono);font-style:normal;font-size:.6rem;letter-spacing:.04em;text-transform:uppercase;color:var(--k);margin-left:4px;vertical-align:1px;white-space:nowrap}
+.note{margin:4px 0 0;font-size:.74rem;color:var(--muted);display:flex;gap:6px;align-items:baseline}
+.note b{color:var(--k);font-family:var(--mono);font-size:.62rem;letter-spacing:.06em;text-transform:uppercase;font-weight:600;white-space:nowrap}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;margin:12px 0 0;font-size:.82rem;color:var(--muted)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend i{display:inline-block;width:14px;height:9px;border-radius:2px;background:var(--m);border-bottom:2px solid var(--k)}
+.legend i.bot{width:12px;height:12px;border-radius:50%;background:var(--agent);border:0}
+.legend i.th{width:12px;height:12px;border-radius:50%;background:transparent;border:2px dashed var(--think)}
+.legend i.ring{width:10px;height:10px;border:2.5px solid var(--l);border-radius:50%;background:transparent}
+.legend i.ring.dash{border-style:dashed}
+.legend i.box{width:14px;height:10px;border:1.5px solid var(--agent);border-radius:2px;background:var(--room-fix)}
+.cap{font-size:1rem;margin:12px 0 0;color:var(--muted)}
+
+/* A post column (700-1000px): the three columns of the full view, tighter. Below 700px: one column,
+   every panel with a height of its own, the three charts side by side. */
+@media (min-width:700px) and (max-width:1000px){
+ .stage{grid-template-columns:minmax(0,30fr) minmax(0,44fr) minmax(0,26fr);gap:8px;height:720px;min-height:0}
+ .feed{height:auto}
+ .col>.panel{flex:1 1 0}
+ .panel{padding:8px 8px 6px}
+ .panel h2{font-size:.76rem}
+ .panel svg{height:100%}
+ .plan{height:100%;max-height:100%}
+ .head{gap:6px 12px}.name{font-size:1rem}.stats{gap:10px;font-size:.7rem}
+ .rd{padding:6px 8px 4px}.rd header{gap:4px 8px}
+ .blk p{font-size:.78rem}.blk pre{font-size:.68rem}.rd .n,.rd .tok{font-size:.66rem}
+ .legend{font-size:.74rem;gap:4px 10px}
+}
+@media (max-width:699px){
+ .stage{grid-template-columns:1fr;height:auto;min-height:0}
+ .feed{height:520px}
+ .col{min-height:0}
+ .col:nth-child(2)>.plan-panel{flex:none;height:440px}
+ .col:nth-child(2)>.flow{flex:none;height:400px}
+ .col:last-child{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+ .col:last-child>.chart{flex:none;height:230px}
+ .panel svg{height:100%}
+ .plan{height:100%;max-height:100%}
+}
+</style>
+<div class="wrap">
+  <div class="controls">
+    <label>Trajectory <select id="sel"></select></label>
+    <button type="button" id="replay">Replay</button>
+  </div>
+  <div class="head" id="head" hidden></div>
+  <div class="stage">
+    <div class="feed"><h2>Trajectory Viewer</h2><div class="roll" id="roll"></div></div>
+    <div class="col">
+      <div class="panel plan-panel"><h2>Workflow <small id="planSub"></small></h2><div id="planBox"></div></div>
+      <svg id="flow" viewBox="0 0 780 440" hidden aria-hidden="true"></svg>
+    </div>
+    <div class="col">
+      <div class="panel chart"><h2>tokens written</h2><svg id="curveTok" viewBox="0 0 560 330" role="img" aria-label="tokens written by turn"></svg></div>
+      <div class="panel chart"><h2>removable tokens</h2><svg id="curveWaste" viewBox="0 0 560 330" role="img" aria-label="removable tokens by turn"></svg></div>
+      <div class="panel chart"><h2>waste ratio</h2><svg id="curveRatio" viewBox="0 0 560 330" role="img" aria-label="removable share by turn"></svg></div>
+    </div>
+  </div>
+  <div class="legend">
+    <span><i class="bot"></i>the turn’s reply + tool calls</span>
+    <span><i class="th"></i>the turn’s reasoning</span>
+    <span id="lgfix"><i class="box"></i>patched</span>
+    <span><i class="ring" style="--l:var(--waste)"></i>detour (more than 50% of the tokens are waste)</span>
+    <span><i class="ring dash" style="--l:var(--dup)"></i>repeat fetch</span>
+    <span><i class="ring" style="--l:var(--stuck)"></i>restated</span>
+    <span><i class="ring" style="--l:var(--pad)"></i>padding</span>
+  </div>
+  <p class="cap" id="cap" hidden></p>
+</div>
+<script>
+let DATA=[]; let BENCH_KEY="swe_verified"; let CFG=null;
+const BENCH={
+  "swe_verified":{label:"swe_verified",plan:"the repository: one block per folder",top:{name:"issue",label:"issue",sub:"the PR description, where every run starts"},bottom:[{key:"term",label:"terminal",sub:"tests, scripts, git"},{key:"exit",label:"submit",sub:"the patch leaves the repository"}],fixLegend:"the folder this agent patched",noun:["file","files"],taskLabel:id=>id},
+  "tau2-retail":{label:"tau2 retail",plan:"the service counter: one desk per tool",layout:"counter",top:{name:"customer",label:"customer",sub:"waiting at the counter"},bottom:[],fixLegend:"",noun:["record","records"],taskLabel:id=>"task "+id},
+  "tau2-airline":{label:"tau2 airline",plan:"the service counter: one desk per tool",layout:"counter",top:{name:"customer",label:"passenger",sub:"waiting at the counter"},bottom:[],fixLegend:"",noun:["record","records"],taskLabel:id=>"task "+id},
+  "mcp_atlas":{label:"mcp_atlas",plan:"the toolbox: one block per MCP server",top:{name:"question",label:"question",sub:"the task, where every run starts"},bottom:[{key:"term",label:"notes",sub:"text between tool calls"},{key:"exit",label:"answer",sub:"the final reply"}],fixLegend:"",noun:["distinct call","distinct calls"],taskLabel:id=>"task "+id.slice(0,8)},
+  "claw_eval":{label:"claw_eval",plan:"the office: one block per app",top:{name:"question",label:"brief",sub:"the task, where every run starts"},bottom:[{key:"term",label:"notes",sub:"text between tool calls"},{key:"exit",label:"deliverable",sub:"the final reply"}],fixLegend:"",noun:["distinct call","distinct calls"],taskLabel:id=>"task "+id},
+};
+const STATES=["FRAME","PLAN","RETRIEVE","INTERPRET","DERIVE","MUTATE","VERIFY","RECOVER"];
+const COL={FRAME:"#446380",PLAN:"#5E93AE",RETRIEVE:"#6FA0B8",INTERPRET:"#6B8FA8",DERIVE:"#8093AD",MUTATE:"#FE5E1C",VERIFY:"#E09A2E",RECOVER:"#B8410A"};
+const ICON={FRAME:"center_focus_strong",PLAN:"checklist",RETRIEVE:"search",INTERPRET:"manage_search",DERIVE:"functions",MUTATE:"edit",VERIFY:"fact_check",RECOVER:"healing"};
+const DEF={FRAME:"what is being asked",PLAN:"order and route",RETRIEVE:"read the environment",INTERPRET:"make sense of a result",DERIVE:"reason from the known",MUTATE:"compose the deliverable",VERIFY:"check an expectation",RECOVER:"react to a failure"};
+const KIND={detour:["var(--m-detour)","var(--waste)","detour"],unread:["var(--m-detour)","var(--waste)","detour"],"duplicate-fetch":["var(--m-dup)","var(--dup)","repeat fetch"],restated:["var(--m-restated)","var(--stuck)","restated"],padding:["var(--m-padding)","var(--pad)","padding"]};
+const KIND_COLOR={detour:"var(--waste)",unread:"var(--waste)","duplicate-fetch":"var(--dup)",restated:"var(--stuck)",padding:"var(--pad)"};
+const $=id=>document.getElementById(id);
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const fmt=n=>Math.round(n).toLocaleString("en-US");
+const NS="http://www.w3.org/2000/svg";
+const el=(n,a)=>{const e=document.createElementNS(NS,n);for(const k in a)e.setAttribute(k,a[k]);return e;};
+const sel=$("sel");
+function taskLabel(t){return (BENCH[t.bench]||BENCH.swe_verified).taskLabel(t.task);}
+async function load(){
+  const inl=document.getElementById("data");
+  if(inl){DATA=JSON.parse(inl.textContent);}
+  else{try{const r=await fetch("merged.json");DATA=await r.json();}catch(e){$("cap").hidden=false;$("cap").textContent="Could not load merged.json";return;}}
+  DATA.forEach((t,i)=>{const o=document.createElement("option");o.value=i;o.textContent=`${(BENCH[t.bench]||{}).label||t.bench} · ${taskLabel(t)} · ${t.short}${t.effort?" "+t.effort:""}`;sel.appendChild(o);});
+}
+sel.addEventListener("change",start);$("replay").addEventListener("click",start);
+
+// ---- the building -----------------------------------------------------
+const NOISE=/^(re\.c|os\.p|sys\.p|self\.|np\.|pd\.)|^[\w]+\.(c|h|js)$/;
+function roomsOf(trajs){
+  // files either agent referenced, with directories kept as halls; order of first visit
+  const count=new Map(), order=[];
+  trajs.forEach(t=>t.rounds.forEach(r=>r.files.forEach(f=>{
+    if(NOISE.test(f))return;
+    if(!f.includes("/")&&!/\.(py|rst|txt|cfg|toml|ini|html|js|c|h|yml|yaml|json|md|tex)$/.test(f))return;
+    if(!count.has(f)){count.set(f,0);order.push(f);}count.set(f,count.get(f)+1);
+  })));
+  return order.filter(f=>f.includes("/")||count.get(f)>=2||/\.(py|rst)$/.test(f)).filter(f=>!["notes","answer",CFG.top.name].includes(wingOf(f)));
+}
+function wingOf(f){if(f.startsWith("tmp/"))return "scratch";const i=f.indexOf("/");return i<0?"repo root":f.slice(0,i);}
+function fixOf(t,rooms){
+  const read=new Set(), fix=[]; if(!CFG.fixLegend)return fix;
+  t.rounds.forEach(r=>{if(r.op==="read"||r.op==="search"||r.op==="git"||r.op==="test")r.files.forEach(f=>read.add(f));});
+  t.rounds.forEach(r=>{if(r.op==="edit")r.files.forEach(f=>{if(read.has(f)&&rooms.includes(f)&&!f.startsWith("tmp/")&&!fix.includes(f))fix.push(f);});});
+  return fix;
+}
+function layout(rooms){
+  if(CFG.layout==="counter")return layoutCounter(rooms);
+  const W=600, pad=18; const inset=16;
+  const folders=[]; const files=new Map();
+  rooms.forEach(f=>{const w=wingOf(f);if(!files.has(w)){files.set(w,[]);folders.push(w);}files.get(w).push(f);});
+  folders.sort((a,b)=>files.get(b).length-files.get(a).length);
+  const cols=folders.length<=4?2:3, bw=(W-(cols+1)*pad)/cols, bh=112;
+  const issue={x:pad,y:pad,w:W-2*pad,h:38,row:-1,col:null,name:CFG.top.name};
+  const boxes=[], pos=new Map(); const top0=issue.y+issue.h+pad;
+  folders.forEach((w,i)=>{
+    const c=i%cols, r=Math.floor(i/cols); const x=pad+c*(bw+pad), y=top0+r*(bh+pad);
+    const fs=files.get(w); const n=fs.length, gc=Math.ceil(Math.sqrt(n)), gr=Math.ceil(n/gc);
+    const cw=(bw-2*inset)/gc, rh=(bh-38-inset)/gr;
+    const box={name:w,x,y,w:bw,h:bh,tint:`var(--f${i%8})`,n,row:r,col:c}; boxes.push(box);
+    // invisible anchors inside the block, one per file, so a second trip to the same file lands on the same spot
+    fs.forEach((f,j)=>pos.set(f,{x:x+inset+(j%gc+0.5)*cw,y:y+38+(Math.floor(j/gc)+0.5)*rh,row:r,col:c,box}));
+  });
+  const rows=Math.ceil(folders.length/cols); const y2=top0+rows*(bh+pad);
+  const half=(W-3*pad)/2; const hasBottom=CFG.bottom.length>0;
+  const term=hasBottom?{x:pad,y:y2,w:half,h:38,row:rows,col:0}:null, exit=hasBottom?{x:pad*2+half,y:y2,w:half,h:38,row:rows,col:cols-1}:null;
+  const corrY=r=>r<0?issue.y+issue.h+pad/2:r>=rows?y2-pad/2:top0+r*(bh+pad)+bh+pad/2; // the gap under a row
+  const corrX=c=>pad/2+c*(bw+pad); // the gap left of a column (c = cols is the right margin)
+  return {W,H:(hasBottom?y2+38:y2-pad)+pad,issue,term,exit,boxes,pos,rows,cols,corrY,corrX};
+}
+function layoutCounter(rooms){
+  const W=600, pad=18, inset=16, custW=104, stripW=52;
+  const folders=[]; const files=new Map();
+  rooms.forEach(f=>{const w=wingOf(f);if(!files.has(w)){files.set(w,[]);folders.push(w);}files.get(w).push(f);});
+  folders.sort((a,b)=>files.get(b).length-files.get(a).length);
+  const cols=2, x0=pad+custW+stripW+pad, bw=(W-x0-pad-(cols-1)*pad)/cols, bh=104;
+  const boxes=[], pos=new Map(); const top0=pad;
+  folders.forEach((w,i)=>{
+    const c=i%cols, r=Math.floor(i/cols); const x=x0+c*(bw+pad), y=top0+r*(bh+pad);
+    const fs=files.get(w); const n=fs.length, gc=Math.ceil(Math.sqrt(n)), gr=Math.ceil(n/gc);
+    const cw=(bw-2*inset)/gc, rh=(bh-38-inset)/gr;
+    boxes.push({name:w,x,y,w:bw,h:bh,tint:`var(--f${i%8})`,n,row:r,col:c});
+    fs.forEach((f,j)=>pos.set(f,{x:x+inset+(j%gc+0.5)*cw,y:y+38+(Math.floor(j/gc)+0.5)*rh,row:r,col:c}));
+  });
+  const rows=Math.max(1,Math.ceil(folders.length/cols)); const H=top0+rows*(bh+pad)-pad+pad;
+  // the customer stands on the left; the agent's spot at the counter is just inside the customer's block
+  const issue={x:pad,y:pad,w:custW,h:H-2*pad,row:null,col:-1,name:CFG.top.name,cx:pad+custW+stripW-16,cy:pad+(H-2*pad)/2,counterX:pad+custW+stripW/2-8};
+  const corrY=r=>top0+r*(bh+pad)+bh+pad/2;
+  const corrX=c=>x0-pad/2+c*(bw+pad);
+  return {W,H,issue,term:null,exit:null,boxes,pos,rows,cols,corrY,corrX,counter:true};
+}
+const ctr=b=>b.cx!=null?[b.cx,b.cy]:b.w!=null?[b.x+b.w/2,b.y+b.h/2]:[b.x,b.y];
+// an orthogonal walk along the gaps between blocks, nudged a little per step so repeated trips stay side by side
+function route(L,a,b,k){
+  const [ax,ay]=ctr(a),[bx,by]=ctr(b); const o=0;
+  if(a.box&&b.box&&a.box===b.box){const pts=[[ax,ay],[bx,ay],[bx,by]];return pts.filter((p,i)=>!i||Math.abs(p[0]-pts[i-1][0])>0.01||Math.abs(p[1]-pts[i-1][1])>0.01);} // inside a block: across, then down, never a diagonal
+  if(L.counter&&(a.col===-1||b.col===-1)){
+    const aisle=L.corrX(0)+o;
+    if(a.col===-1&&b.col===-1)return [[ax,ay],[bx,by]];
+    const d=a.col===-1?b:a; const yd=L.corrY(d.row)+o; const [dx,dy]=ctr(d);
+    const pts=a.col===-1?[[ax,ay],[aisle,ay],[aisle,yd],[dx,yd],[dx,dy]]:[[dx,dy],[dx,yd],[aisle,yd],[aisle,by],[bx,by]];
+    return pts.filter((p,i)=>!i||Math.abs(p[0]-pts[i-1][0])>0.01||Math.abs(p[1]-pts[i-1][1])>0.01);
+  }
+  const ya=L.corrY(Math.min(a.row,L.rows-1))+o, yb=L.corrY(Math.min(b.row,L.rows-1))+o;
+  let pts;
+  if(a.col==null||b.col==null||a.col===b.col){ // the issue desk spans every column; same column needs no cross corridor
+    pts=[[ax,ay],[ax,ya],[bx,ya],[bx,yb],[bx,by]];
+  }else{
+    const vx=L.corrX(a.col<b.col?b.col:a.col)+o;
+    pts=[[ax,ay],[ax,ya],[vx,ya],[vx,yb],[bx,yb],[bx,by]];
+  }
+  return pts.filter((p,i)=>!i||Math.abs(p[0]-pts[i-1][0])>0.01||Math.abs(p[1]-pts[i-1][1])>0.01);
+}
+const ICONS={
+  swe_verified:{_:"folder",scratch:"draft",tests:"science",testing:"science",docs:"menu_book",doc:"menu_book",examples:"school","repo root":"home",lib:"folder",src:"folder",_top:"bug_report",_term:"terminal",_exit:"publish"},
+  tau2:{_:"widgets",customer:"person",verify:"verified_user",orders:"inventory_2",products:"shopping_bag",reservations:"airplane_ticket",flights:"flight",changes:"edit",calculator:"calculate",transfer:"support_agent",_top:"person"},
+  mcp_atlas:{_:"extension",fetch:"download","ddg-search":"search","brave-search":"search",exa:"search",arxiv:"menu_book",pubmed:"menu_book","open-library":"menu_book",wikipedia:"menu_book",context7:"library_books",notion:"sticky_note_2",oxylabs:"travel_explore",filesystem:"folder_open",mongodb:"database",airtable:"database","met-museum":"museum","osm-mcp-server":"map","osm-mcp-search":"map","google-maps":"map","national-parks":"park",twelvedata:"show_chart",alchemy:"show_chart","cli-mcp-server":"terminal","desktop-commander":"terminal","mcp-code-executor":"code","e2b-server":"code","mcp-server-code-runner":"code",git:"code",github:"code",slack:"chat","weather-data":"partly_cloudy_day",weather:"partly_cloudy_day","lara-translate":"translate",memory:"memory",calculator:"calculate","google-workspace":"work","clinicaltrialsgov-mcp-server":"medical_services",whois:"dns",_top:"help",_term:"edit_note",_exit:"send"},
+  claw_eval:{_:"apps",web:"language",gmail:"mail",helpdesk:"support_agent",contacts:"contacts",kb:"menu_book",crm:"groups",calendar:"calendar_month",inventory:"inventory_2",rss:"rss_feed",finance:"payments",config:"settings",scheduler:"schedule",todo:"checklist",ocr:"document_scanner",documents:"description",shell:"terminal",terminal:"terminal",command:"terminal",exec:"terminal",execute:"terminal",run:"terminal",container:"terminal",python:"terminal",caption:"image",read:"visibility",write:"edit",_top:"assignment",_term:"edit_note",_exit:"task_alt"},
+};
+function iconFor(name){const t=ICONS[BENCH_KEY.startsWith("tau2")?"tau2":BENCH_KEY]||ICONS.swe_verified;return t[name]||t._;}
+const icoSVG=(b,name)=>`<text class="ico" x="${b.x+b.w-30}" y="${b.y+b.h-10}">${name}</text>`;
+function planSVG(L,rooms,fixA,colorVar){
+  let s=`<svg class="plan" viewBox="0 0 ${L.W} ${L.H}" role="img" aria-label="repository map"><defs><filter id="pglow" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="2.4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>`;
+  const desk=(b,label,sub,icon)=>`<rect x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" rx="4" fill="var(--wing)" stroke="var(--wall)" stroke-width="1"/><text class="wingl" x="${b.x+10}" y="${b.y+15}">${esc(label)}</text><text class="wsub" x="${b.x+10}" y="${b.y+32}">${esc(sub)}</text>${icoSVG(b,icon)}`;
+  if(L.counter){const b=L.issue, px=b.x+b.w/2, py=b.y+b.h/2;
+    s+=`<rect x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" rx="6" fill="var(--wing)" stroke="var(--wall)" stroke-width="1"/>`;
+    s+=`<circle cx="${px}" cy="${py-22}" r="10" fill="var(--muted)"/><path d="M${px-18} ${py+18}a18 20 0 0 1 36 0z" fill="var(--muted)"/>`;
+    s+=`<text class="wingl" x="${b.x+10}" y="${b.y+16}">${esc(CFG.top.label)}</text><text class="wsub" x="${b.x+10}" y="${b.y+32}">${esc(CFG.top.sub)}</text>`;
+    // the counter: a bar between the customer and the agent's side
+    s+=`<line x1="${b.counterX}" y1="${b.y+6}" x2="${b.counterX}" y2="${b.y+b.h-6}" stroke="var(--wall)" stroke-width="4" stroke-linecap="round"/>`;
+    s+=`<text class="wsub" x="${b.counterX}" y="${b.y+b.h+12}" text-anchor="middle">counter</text>`;}
+  else s+=desk(L.issue,CFG.top.label,CFG.top.sub,iconFor("_top"));
+  const fixFolders=new Set(fixA.map(wingOf));
+  L.boxes.forEach(b=>{const fx=fixFolders.has(b.name);
+    s+=`<rect x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" rx="6" fill="${b.tint}" stroke="${fx?colorVar:"none"}" stroke-width="${fx?2.5:0}"/><text class="wingl" x="${b.x+10}" y="${b.y+16}">${esc(b.name)}/</text><text class="wsub" x="${b.x+10}" y="${b.y+32}">${b.n} ${CFG.noun[b.n>1?1:0]} touched${fx?" · patched here":""}</text>${icoSVG(b,iconFor(b.name))}`;});
+  if(L.term)s+=desk(L.term,CFG.bottom[0].label,CFG.bottom[0].sub,iconFor("_term"));
+  if(L.exit)s+=desk(L.exit,CFG.bottom[1].label,CFG.bottom[1].sub,iconFor("_exit"));
+  s+=`<g class="trail"></g><g class="stalls"></g><g class="callouts"></g><g class="agent"><line x1="0" y1="-13" x2="0" y2="-9" stroke="${colorVar}" stroke-width="1.5"/><circle cx="0" cy="-14" r="1.8" fill="${colorVar}"/><rect x="-8" y="-9" width="16" height="11" rx="3" fill="${colorVar}"/><rect x="-5" y="-6" width="3.2" height="3.2" rx=".6" fill="var(--bg)"/><rect x="1.8" y="-6" width="3.2" height="3.2" rx=".6" fill="var(--bg)"/><rect x="-3" y="-1.5" width="6" height="1.2" rx=".6" fill="var(--bg)"/><rect x="-6" y="3" width="12" height="7" rx="2" fill="${colorVar}"/><rect x="-10" y="4" width="3" height="4" rx="1" fill="${colorVar}"/><rect x="7" y="4" width="3" height="4" rx="1" fill="${colorVar}"/></g></svg>`;
+  return s;
+}
+function targetOf(L,r,rooms){
+  const f=r.files.find(x=>L.pos.has(x));
+  if((r.op==="submit"||r.op==="answer")&&L.exit)return L.exit;
+  if(r.op==="note"&&L.term)return L.term;
+  if(r.op==="reply"||r.files.some(x=>wingOf(x)===CFG.top.name))return L.issue;
+  if(f)return L.pos.get(f);
+  if(L.term)return L.term; // no file in the command (ls, git, a repo-wide grep, tests): that is terminal work
+  return null; // stay
+}
+
+const CW=560, CH=330, M={l:88,r:30,t:16,b:50};
+function chartSetup(id,label,maxX,maxY,opts={}){
+  const svg=$(id); const X=k=>M.l+(k/maxX)*(CW-M.l-M.r), Y=v=>M.t+(1-v/maxY)*(CH-M.t-M.b);
+  let g="";
+  const nice=opts.pct?0.25:maxY>=4000?Math.ceil(maxY/4000)*1000:maxY>=400?Math.ceil(maxY/400)*100:Math.max(10,Math.ceil(maxY/40)*10);
+  for(let v=0;v<=maxY+1e-9;v+=nice){g+=`<line class="grid" x1="${M.l}" x2="${CW-M.r}" y1="${Y(v)}" y2="${Y(v)}"/><text x="${M.l-6}" y="${Y(v)+3.5}" text-anchor="end">${opts.pct?Math.round(v*100)+"%":fmt(v)}</text>`;}
+  const xt=maxX<=12?1:maxX<=30?5:10;
+  for(let k=0;k<=maxX;k+=xt){g+=`<text x="${X(k)}" y="${CH-M.b+14}" text-anchor="middle">${k}</text>`;}
+  g+=`<text x="${(M.l+CW-M.r)/2}" y="${CH-4}" text-anchor="middle" class="lbl">step</text>`;
+  g+=`<text transform="translate(12 ${(M.t+CH-M.b)/2}) rotate(-90)" text-anchor="middle" class="lbl">${label}</text>`;
+  g+=`<path class="ln" data-i="0" fill="none" stroke="var(--car-a)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/><path class="ln" data-i="1" fill="none" stroke="var(--car-b)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>`;
+  if(opts.second)g+=`<path class="ln2" data-i="0" fill="none" stroke="var(--car-a)" stroke-width="1.8" stroke-dasharray="2 4" stroke-linecap="round"/><path class="ln2" data-i="1" fill="none" stroke="var(--car-b)" stroke-width="1.8" stroke-dasharray="2 4" stroke-linecap="round"/>`;
+  g+=`<text class="lbl end" data-i="0" style="fill:var(--car-a)"></text><text class="lbl end" data-i="1" style="fill:var(--car-b)"></text>`;
+  svg.innerHTML=g; return {svg,X,Y,pct:!!opts.pct};
+}
+function chartDraw(ch,i,series,prog,name,cls="ln"){
+  // series[k] = cumulative value after step k+1; prog = steps completed + fraction of the current one
+  const pts=[[ch.X(0),ch.Y(ch.pct?(series[0]||0):0)]]; const k=Math.floor(prog), f=prog-k;
+  for(let j=0;j<k&&j<series.length;j++)pts.push([ch.X(j+1),ch.Y(series[j])]);
+  if(f>0&&k<series.length){const prev=k?series[k-1]:(ch.pct?series[0]:0);pts.push([ch.X(k+f),ch.Y(prev+(series[k]-prev)*f)]);}
+  ch.svg.querySelector(`.${cls}[data-i="${i}"]`).setAttribute("d",pts.map((p,j)=>`${j?"L":"M"}${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(""));
+  if(cls!=="ln")return;
+  const last=pts[pts.length-1]; const t=ch.svg.querySelector(`.end[data-i="${i}"]`); t.setAttribute("x",last[0]+6); t.setAttribute("y",last[1]+(i?12:-5)); t.textContent=name;
+}
+
+function polyAt(pts,f){ // point at fraction f of a polyline's length
+  const segs=[];let tot=0;for(let i=1;i<pts.length;i++){const d=Math.hypot(pts[i][0]-pts[i-1][0],pts[i][1]-pts[i-1][1]);segs.push(d);tot+=d;}
+  let d=f*tot;for(let i=1;i<pts.length;i++){if(d<=segs[i-1]||i===pts.length-1){const u=segs[i-1]?Math.min(1,d/segs[i-1]):1;return {p:[pts[i-1][0]+(pts[i][0]-pts[i-1][0])*u,pts[i-1][1]+(pts[i][1]-pts[i-1][1])*u],i};}d-=segs[i-1];}
+  return {p:pts[pts.length-1],i:pts.length-1};
+}
+
+// ---- the transcript ----------------------------------------------------------
+function excerpt(text,marks,head,ctx){
+  const n=text.length; if(!marks||!marks.length)return n>head?[[0,head,true]]:[[0,n,false]];
+  const win=[[0,Math.min(n,head)]]; marks.forEach(m=>win.push([Math.max(0,m[0]-ctx),Math.min(n,m[1]+ctx)]));
+  win.sort((a,b)=>a[0]-b[0]); const out=[];
+  for(const w of win){const last=out[out.length-1];if(last&&w[0]<=last[1]+40)last[1]=Math.max(last[1],w[1]);else out.push([w[0],w[1]]);}
+  return out.map(([a,b])=>[a,b,b<n]);
+}
+function markup(text,marks,head=320,ctx=110,cap=820){
+  const wins=excerpt(text,marks||[],head,ctx); let html="",pos=0,left=cap;
+  const paint=(a,b)=>{let s="",i=a;const ms=(marks||[]).filter(m=>m[1]>a&&m[0]<b).sort((x,y)=>x[0]-y[0]);
+    for(const m of ms){const s0=Math.max(a,m[0]),s1=Math.min(b,m[1]);if(s0>i)s+=esc(text.slice(i,s0));const k=KIND[m[2]]||KIND.detour;const q=text.slice(s0,s1);s+=`<mark style="--m:${k[0]};--k:${k[1]}">${q.length>260?esc(q.slice(0,170))+" … "+esc(q.slice(-60)):esc(q)}<span class="tag">${k[2]}</span></mark>`;i=s1;}
+    if(i<b)s+=esc(text.slice(i,b));return s;};
+  for(let j=0;j<wins.length&&left>0;j++){let [a,b]=wins[j];if(b-a>left){b=a+left;const m=(marks||[]).find(m=>m[0]<b&&m[1]>b);if(m)b=m[0]-a<40?Math.min(wins[j][1],m[1]):m[0];}if(a>pos||j>0&&a>0)html+=" … ";html+=paint(a,b);left-=b-a;pos=b;}if(pos<text.length)html+=" …";
+  return html;
+}
+function callsText(action){
+  const parts=[];const re=/([\w.-]+)\((\{[\s\S]*?\})\)(?=\s*[\w.-]+\(|\s*$)/g;let m;
+  while((m=re.exec(action))){parts.push([m.index,m.index+m[0].length]);}
+  if(!parts.length)return [[0,Math.min(action.length,400)]];
+  return parts.slice(0,5);
+}
+function noteFor(marks){const m=(marks||[]).find(x=>x[3]);if(!m)return "";const k=KIND[m[2]]||KIND.detour;return `<p class="note" style="--k:${k[1]}"><b>${k[2]}</b><span>${esc(m[3])}</span></p>`;}
+// the kinds of waste the judge marked, as chips beside the action type: one per kind, with the number of spans
+function kindChips(...lists){const n={};lists.forEach(ms=>(ms||[]).forEach(m=>{const k=(KIND[m[2]]||KIND.detour)[2];n[k]=(n[k]||0)+1;}));
+  return Object.keys(n).map(k=>{const d=Object.values(KIND).find(v=>v[2]===k);return `<span class="wk" style="--m:${d[0]};--k:${d[1]}">${k}${n[k]>1?` ×${n[k]}`:""}</span>`;}).join("");}
+function cardHTML(rd,i){
+  const s=rd.state, c=COL[s]||"#888"; const chips=kindChips(rd.marks.reasoning,rd.marks.visible,rd.marks.action);
+  let h=`<article class="rd" id="rd${i}"><header><span class="n">turn ${rd.r}</span>${s?`<span class="st" style="--s:${c}">${s}</span>`:""}${chips}<span class="tok">${fmt(rd.b)} tokens${rd.w?` · <b>${fmt(rd.w)} removable</b>`:""}</span></header>`;
+  const blocks=[];
+  if(rd.reasoning.trim())blocks.push(["think",`<span class="ico">psychology</span>reasoning${rd.tstate?` <span class="st" style="--s:${COL[rd.tstate]}">${rd.tstate}</span>`:""}${kindChips(rd.marks.reasoning)}`,`<p>${markup(rd.reasoning,rd.marks.reasoning,200,80,420)}</p>`+noteFor(rd.marks.reasoning)]);
+  if(rd.text.trim())blocks.push(["reply",`<span class="ico">chat_bubble</span>reply${kindChips(rd.marks.visible)}`,`<p>${markup(rd.text,rd.marks.visible,240,90,300)}</p>`+noteFor(rd.marks.visible)]);
+  if(rd.action.trim()){const segs=callsText(rd.action);const marks=rd.marks.action||[];
+    const body=segs.map(([a,b])=>{const ms=marks.filter(m=>m[1]>a&&m[0]<b).map(m=>[Math.max(m[0],a)-a,Math.min(m[1],b)-a,m[2],m[3]]);return markup(rd.action.slice(a,b),ms,140,60,200);}).join("\n");
+    blocks.push(["calls",`<span class="ico">terminal</span>tool calls${kindChips(marks)}`,`<pre>${body}</pre>`+noteFor(marks)]);}
+  if(rd.res&&rd.res.trim())blocks.push(["res",`<span class="ico">output</span>result`,`<pre>${esc(rd.res.slice(0,150))}${rd.res.length>150?" …":""}</pre>`]);
+  blocks.forEach(([cls,title,body],j)=>{h+=`<section class="blk ${cls}" data-j="${j}"><h4>${title}</h4>${body}</section>`;});
+  return h+"</article>";
+}
+
+// ---- the workflow: eight states on a ring, RECOVER in the middle -------------
+const FW=780,FH=440,CX=390,CY=205,RX=272,RY=142,NW=236,NH=74; // a wide ring: the panel is wider than it is tall
+const RING=["FRAME","PLAN","RETRIEVE","INTERPRET","DERIVE","MUTATE","VERIFY"];
+const RO=[NW/2-8,NH/2-1], TO=[-NW/2+20,-NH/2-17]; const off=(p,o)=>[p[0]+o[0],p[1]+o[1]];
+// a 3x3 grid read clockwise, RECOVER in the middle: boxes this wide collide on a ring
+const GX=[140,390,640], GY=[64,205,346];
+const POS={FRAME:[GX[0],GY[0]],PLAN:[GX[1],GY[0]],RETRIEVE:[GX[2],GY[0]],INTERPRET:[GX[2],GY[1]],DERIVE:[GX[2],GY[2]],MUTATE:[GX[1],GY[2]],VERIFY:[GX[0],GY[2]],RECOVER:[GX[1],GY[1]]};
+function flowSVG(){
+  let s="";
+  s+=`<defs><filter id="fglow" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="2.4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><g class="edges"></g>`;
+  STATES.forEach(st=>{const [x,y]=POS[st];
+    s+=`<g class="node" data-s="${st}" transform="translate(${x-NW/2} ${y-NH/2})"><rect width="${NW}" height="${NH}" rx="8" fill="var(--wing)" stroke="${COL[st]}" stroke-width="1.5"/>`+
+       `<rect class="wbar" x="1" y="${NH-4}" width="0" height="3" rx="1" fill="var(--waste)"/>`+
+       `<text class="ico" x="9" y="37" fill="${COL[st]}">${ICON[st]}</text><text class="nm" x="46" y="29">${st}</text><text class="df" x="46" y="49">${DEF[st]}</text><text class="ct" x="46" y="67"></text>`+
+       `<rect class="hl" width="${NW}" height="${NH}" rx="8" fill="none" stroke="var(--agent)" stroke-width="0" x="0" y="0"/>`+
+       `<rect class="hl2" width="${NW+8}" height="${NH+8}" x="-4" y="-4" rx="11" fill="none" stroke="var(--think)" stroke-width="0" stroke-dasharray="4 3"/></g>`;});
+  s+=`<g class="think" opacity="0"><ellipse rx="15" ry="11" fill="var(--paper)" stroke="var(--think)" stroke-width="1.6" stroke-dasharray="3 2"/><circle cx="-13" cy="12" r="3" fill="var(--paper)" stroke="var(--think)" stroke-width="1.4"/><circle cx="-18" cy="19" r="1.8" fill="var(--paper)" stroke="var(--think)" stroke-width="1.2"/><text class="ico" x="-7" y="5" style="font-size:14px" fill="var(--think)">psychology</text><text class="mk" x="19" y="4" fill="var(--think)">reasoning</text></g>`;
+  s+=`<g class="agent"><circle class="pulse" r="0" fill="var(--agent)" opacity="0"/>${ROBOT}<text class="mk" x="8" y="22" text-anchor="end" fill="var(--agent)">reply + tools</text></g>`;
+  return s;
+}
+const ROBOT=`<line x1="0" y1="-13" x2="0" y2="-9" stroke="var(--agent)" stroke-width="1.5"/><circle cx="0" cy="-14" r="1.8" fill="var(--agent)"/><rect x="-8" y="-9" width="16" height="11" rx="3" fill="var(--agent)"/><rect x="-5" y="-6" width="3.2" height="3.2" rx=".6" fill="var(--bg)"/><rect x="1.8" y="-6" width="3.2" height="3.2" rx=".6" fill="var(--bg)"/><rect x="-3" y="-1.5" width="6" height="1.2" rx=".6" fill="var(--bg)"/><rect x="-6" y="3" width="12" height="7" rx="2" fill="var(--agent)"/><rect x="-10" y="4" width="3" height="4" rx="1" fill="var(--agent)"/><rect x="7" y="4" width="3" height="4" rx="1" fill="var(--agent)"/>`;
+// Orthogonal routes on a lattice of box centres and the corridors between them: a walk never cuts a corner or crosses another box.
+const XS=[10,GX[0],265,GX[1],515,GX[2],770], YS=[12,GY[0],134.5,GY[1],275.5,GY[2],405];
+const CELL={}; STATES.forEach(st=>{CELL[st]=[XS.indexOf(POS[st][0]),YS.indexOf(POS[st][1])];});
+const START_CELL=[1,3]; // the empty left-middle slot, where the robot waits before its first turn
+function gridRoute(sa,sb,skip){ // cheapest lattice path from cell sa to cell sb; a turn costs three steps, other boxes are walls
+  const blocked=new Set(STATES.filter(st=>!skip.includes(st)).map(st=>CELL[st].join(",")));
+  const dirs=[[1,0],[-1,0],[0,1],[0,-1]]; const best=new Map(); let open=[{c:0,x:sa[0],y:sa[1],d:-1,p:null}];
+  while(open.length){
+    open.sort((u,v)=>u.c-v.c); const n=open.shift(); const k=`${n.x},${n.y},${n.d}`;
+    if(best.has(k))continue; best.set(k,n);
+    if(n.x===sb[0]&&n.y===sb[1]){const pts=[];for(let q=n;q;q=q.p)pts.unshift([XS[q.x],YS[q.y]]);
+      return pts.filter((pt,i)=>!i||i===pts.length-1||!((pts[i-1][0]===pt[0]&&pts[i+1][0]===pt[0])||(pts[i-1][1]===pt[1]&&pts[i+1][1]===pt[1])));}
+    dirs.forEach(([dx,dy],di)=>{const x=n.x+dx,y=n.y+dy;if(x<0||y<0||x>=XS.length||y>=YS.length)return;
+      if(blocked.has(`${x},${y}`)&&!(x===sb[0]&&y===sb[1]))return;
+      open.push({c:n.c+1+(n.d>=0&&n.d!==di?3:0),x,y,d:di,p:n});});
+  }
+  return [[XS[sa[0]],YS[sa[1]]],[XS[sb[0]],YS[sb[1]]]];
+}
+function edgePath(a,b){
+  const [ax,ay]=POS[a];
+  if(a===b){const lx=ax+NW/2-12,ty=ay+NH/2;return {d:`M${lx-12} ${ty}C${lx-32} ${ty+44},${lx+32} ${ty+44},${lx+12} ${ty}`,pts:null};}
+  const pts=gridRoute(CELL[a],CELL[b],[a,b]);
+  return {d:pts.map((pt,i)=>`${i?"L":"M"}${pt[0]} ${pt[1]}`).join(""),pts};
+}
+const qAt=(q,t)=>{const [p0,p1,p2]=q;const u=1-t;return [u*u*p0[0]+2*u*t*p1[0]+t*t*p2[0],u*u*p0[1]+2*u*t*p1[1]+t*t*p2[1]];};
+const loopAt=(a,t)=>{const r=POS[a], L=u=>[18*Math.cos(Math.PI*(1-u)),26*Math.sin(Math.PI*(1-u))], p=L(t), p0=L(0), p1=L(1);
+  return [r[0]+(p[0]-p0[0])*(1-t)+(p[0]-p1[0])*t, r[1]+(p[1]-p0[1])*(1-t)+(p[1]-p1[1])*t];};
+const ease=f=>f<.5?2*f*f:1-Math.pow(-2*f+2,2)/2;
+
+// ---- the walk: one timeline drives all three views ------------------------
+let raf=null;
+const T_THINK=500,T_ACT=550,T_RES=250,T_READ=10;
+function start(){
+  if(raf){cancelAnimationFrame(raf);raf=null;}
+  window.__done=false; const t=DATA[+sel.value]; if(!t)return;
+  BENCH_KEY=t.bench; CFG=BENCH[t.bench]||BENCH.swe_verified;
+  const rounds=t.rounds.map((rd,i)=>Object.assign({},rd,{res:(t.rounds[i+1]||{}).obs_role==="tool"?(t.rounds[i+1]||{}).obs:""}));
+  const solved=t.score==null?"not graded":t.score>=1?"solved":"failed";
+  $("head").innerHTML=`<div class="name"><span class="sw"></span>${esc(t.short)}</div>${t.effort?`<span class="chip">${esc(t.effort)} effort</span>`:""}<span class="chip">${esc(CFG.label)}</span><span class="chip" style="text-transform:none">${esc(taskLabel(t))}</span><span class="chip">${solved}</span>`+
+    `<div class="stats"><span>turn <b id="sTurn">0</b>/${rounds.length}</span><span>written <b id="sTok">0</b></span><span>removable <b id="sW">0</b></span><span>waste ratio <b id="sR">0%</b></span></div>`;
+  // the building
+  const traj={rounds:rounds}; const rooms=roomsOf([traj]); const L=layout(rooms); const fix=fixOf(traj,rooms);
+  $("planSub").textContent=CFG.plan; $("lgfix").hidden=!CFG.fixLegend;
+  $("planBox").innerHTML=planSVG(L,rooms,fix,"var(--agent)");
+  const plan=$("planBox").querySelector("svg"), trail=plan.querySelector(".trail"), stalls=plan.querySelector(".stalls"), bot=plan.querySelector(".agent");
+  let at=L.issue; const rings=new Map();
+  rounds.forEach((rd,i)=>{const tgt=targetOf(L,rd,rooms); const wasteful=rd.b&&rd.w/rd.b>=0.5&&rd.top; rd.kind=wasteful?rd.top.kind:null; rd.col=rd.kind?KIND_COLOR[rd.kind]:"var(--agent)";
+    rd.move=!!(tgt&&tgt!==at); rd.pts=rd.move?route(L,at,tgt,i):null; rd.from=at; rd.to=rd.move?tgt:at; if(rd.move)at=tgt;});
+  bot.setAttribute("transform",`translate(${ctr(L.issue).join(" ")})`);
+  // the workflow and the transcript
+  const svg=$("flow"); svg.innerHTML=flowSVG();
+  const roll=$("roll"); roll.innerHTML=rounds.map(cardHTML).join(""); roll.style.transform="translateY(0px)";
+  const edges=svg.querySelector(".edges"), agent=svg.querySelector(".agent"), think=svg.querySelector(".think");
+  const node=s=>svg.querySelector(`.node[data-s="${s}"]`);
+  const bpulse=el("circle",{class:"pulse",r:0,fill:"var(--agent)",opacity:0}); bot.insertBefore(bpulse,bot.firstChild); const fpulse=agent.querySelector(".pulse");
+  const visits={},bil={},was={},edgeN={};
+  // the curves
+  let cb=0,cw=0; const tokS=[],wS=[],rS=[]; rounds.forEach(rd=>{cb+=rd.b;cw+=rd.w;tokS.push(cb);wS.push(cw);rS.push(cb?cw/cb:0);});
+  const chTok=chartSetup("curveTok","tokens written so far",rounds.length,Math.max(cb,1)), chW=chartSetup("curveWaste","removable tokens so far",rounds.length,Math.max(cw,1)), chR=chartSetup("curveRatio","removable share so far",rounds.length,1,{pct:true});
+  chW.svg.querySelector('.ln[data-i="0"]').setAttribute("stroke","var(--waste)");
+  const phases=[]; let prev=null,prevT=null; cb=0;cw=0;
+  rounds.forEach((rd,i)=>{
+    cb+=rd.b;cw+=rd.w; const card=$("rd"+i); const blocks=[...card.querySelectorAll(".blk")];
+    const chars=(rd.reasoning.length+rd.text.length)/10;
+    if(rd.reasoning.trim())phases.push({i,kind:"think",rd,from:prevT,to:rd.tstate,dur:T_THINK+Math.min(300,chars*T_READ),blk:blocks.find(b=>b.classList.contains("think"))});
+    phases.push({i,kind:"act",rd,from:prev,to:rd.state,dur:T_ACT+Math.min(200,chars*T_READ*0.5),blk:blocks.filter(b=>!b.classList.contains("think")&&!b.classList.contains("res")),cb,cw});
+    if(rd.res&&rd.res.trim())phases.push({i,kind:"res",rd,dur:T_RES,blk:blocks.find(b=>b.classList.contains("res"))}); // a blank tool result has no block to reveal
+    if(rd.state)prev=rd.state; if(rd.tstate)prevT=rd.tstate;
+  });
+  let k=0,ph=null,pStart=0,y=0,yTarget=0,last=null;
+  const place=(g,p)=>g.setAttribute("transform",`translate(${p[0].toFixed(1)} ${p[1].toFixed(1)})`);
+  place(agent,[GX[0],GY[1]]); think.setAttribute("opacity","0");
+  const feedH=()=>roll.parentElement.getBoundingClientRect().height;
+  roll.style.setProperty("--card",Math.floor((feedH()-42)/2-22)+"px");
+  const scrollTo=(card,blk)=>{yTarget=Math.max(0,card.offsetTop-42-card.offsetHeight-22);}; // the previous turn stays in view above the current one
+  const begin=(p,now)=>{
+    pStart=now; const card=$("rd"+p.i); card.classList.add("on"); roll.querySelectorAll(".rd.cur").forEach(c=>c.classList.remove("cur","th")); card.classList.add("cur"); card.classList.toggle("th",p.kind==="think");
+    if(p.kind==="think"){p.blk.classList.add("on");scrollTo(card,p.blk);
+      if(p.to){think.setAttribute("opacity","1");p.path=p.from&&p.from!==p.to?{pts:gridRoute(CELL[p.from],CELL[p.to],[p.from,p.to])}:null;
+        svg.querySelectorAll(".hl2").forEach(h=>h.setAttribute("stroke-width","0"));}
+    }
+    if(p.kind==="act"){p.blk.forEach(b=>b.classList.add("on"));scrollTo(card,p.blk[p.blk.length-1]);
+      if(p.to){const from=p.from;
+        if(from){const key=from+">"+p.to;edgeN[key]=(edgeN[key]||0)+1;const e=edgePath(from,p.to);
+          let line=edges.querySelector(`[data-e="${key}"]`);
+          if(!line){line=el("path",{d:e.d,fill:"none",stroke:"var(--agent)","stroke-linecap":"round","stroke-linejoin":"round","stroke-opacity":".8","data-e":key});edges.appendChild(line);}
+          line.setAttribute("stroke-width",(2.6+1.2*edgeN[key]).toFixed(1));edges.querySelectorAll(".live").forEach(l=>l.classList.remove("live"));if(from!==p.to){line.classList.add("live");p.edge=line;}
+          p.path=from===p.to?{loop:from}:{pts:e.pts};}
+        else p.path={pts:gridRoute(START_CELL,CELL[p.to],[p.to])};
+        svg.querySelectorAll(".hl").forEach(h=>h.setAttribute("stroke-width","0"));}
+      // the floor plan: a line grows behind the robot; a wasteful step leaves a ring where it ended
+      const rd=p.rd; bpulse.setAttribute("fill",rd.col);
+      if(rd.move){p.line=el("polyline",{points:"",fill:"none",stroke:rd.col,"stroke-width":rd.kind?4.5:3,"stroke-linecap":"round","stroke-linejoin":"round","stroke-opacity":rd.kind?1:.8});
+        if(rd.kind==="duplicate-fetch")p.line.setAttribute("stroke-dasharray","3 4");(rd.kind?stalls:trail).appendChild(p.line);}
+      if(rd.kind){const c=ctr(rd.to),key=c.map(v=>v.toFixed(0)).join(","),n=rings.get(key)||0;rings.set(key,n+1);
+        p.ring=el("circle",{cx:c[0],cy:c[1],r:0,fill:"none",stroke:rd.col,"stroke-width":3.5,"data-r":9+4*n});if(rd.kind==="duplicate-fetch")p.ring.setAttribute("stroke-dasharray","3 3");stalls.appendChild(p.ring);}
+      $("sTurn").textContent=p.i+1;$("sTok").textContent=fmt(p.cb);$("sW").textContent=fmt(p.cw);$("sR").textContent=p.cb?Math.round(100*p.cw/p.cb)+"%":"0%";
+    }
+    if(p.kind==="res"){p.blk.classList.add("on");scrollTo(card,p.blk);}
+  };
+  const end=p=>{
+    if(p.kind==="act"){
+      if(p.to){const n=node(p.to);visits[p.to]=(visits[p.to]||0)+1;bil[p.to]=(bil[p.to]||0)+p.rd.b;was[p.to]=(was[p.to]||0)+p.rd.w;
+        n.querySelector(".ct").textContent=`${visits[p.to]}× · ${bil[p.to]?Math.round(100*was[p.to]/bil[p.to]):0}% removable`;
+        n.querySelector(".wbar").setAttribute("width",(bil[p.to]?(NW-2)*was[p.to]/bil[p.to]:0).toFixed(1));
+        n.querySelector(".hl").setAttribute("stroke-width","3");svg.querySelectorAll(".node.cur").forEach(m=>m.classList.remove("cur","th"));n.classList.add("cur");place(agent,off(POS[p.to],RO));}
+      if(p.edge){p.edge.classList.remove("live");p.edge.removeAttribute("stroke-dashoffset");}
+      const c=ctr(p.rd.to);bot.setAttribute("transform",`translate(${c[0].toFixed(1)} ${c[1].toFixed(1)})`);
+      if(p.line)p.line.setAttribute("points",p.rd.pts.map(x=>x.join(",")).join(" "));
+      if(p.ring)p.ring.setAttribute("r",p.ring.dataset.r);
+      const prog=p.i+1; chartDraw(chTok,0,tokS,prog,"");chartDraw(chW,0,wS,prog,"");chartDraw(chR,0,rS,prog,"");
+    }
+    if(p.kind==="think"&&p.to){svg.querySelectorAll(".node.cur").forEach(m=>m.classList.remove("cur","th"));node(p.to).classList.add("cur","th");node(p.to).querySelector(".hl2").setAttribute("stroke-width","1.6");place(think,off(POS[p.to],TO));}
+  };
+  const frame=now=>{
+    if(!ph){if(k>=phases.length){raf=null;window.__done=true;return;}ph=phases[k];begin(ph,now);}
+    const f=Math.min(1,(now-pStart)/ph.dur);
+    if(ph.kind==="act"){const e=ease(f);
+      if(ph.to&&ph.path)place(agent,off(ph.path.loop?loopAt(ph.path.loop,e):polyAt(ph.path.pts,e).p,RO));
+      if(ph.edge)ph.edge.setAttribute("stroke-dashoffset",(-(now-pStart)/28).toFixed(1));
+      const rd=ph.rd; let pt,rot=0;
+      if(rd.move){const q=polyAt(rd.pts,e);pt=q.p;ph.line.setAttribute("points",rd.pts.slice(0,q.i).concat([pt]).map(x=>x.join(",")).join(" "));if(ph.ring&&f>=1)ph.ring.setAttribute("r",ph.ring.dataset.r);}
+      else{const c=ctr(rd.from);pt=rd.kind?[c[0]+(Math.sin((now-pStart)/22)>0?7:-7),c[1]+(Math.random()-0.5)*6]:c;rot=rd.kind?(Math.sin((now-pStart)/34)>0?10:-10):0;if(ph.ring)ph.ring.setAttribute("r",(ph.ring.dataset.r*f).toFixed(1));}
+      bot.setAttribute("transform",`translate(${pt[0].toFixed(1)} ${pt[1].toFixed(1)}) rotate(${rot})`);
+      const prog=ph.i+f; chartDraw(chTok,0,tokS,prog,"");chartDraw(chW,0,wS,prog,"");chartDraw(chR,0,rS,prog,"");
+    }
+    if(ph.kind==="think"&&ph.to){const e=ease(f);const dest=off(POS[ph.to],TO);
+      if(ph.path)place(think,off(polyAt(ph.path.pts,e).p,TO));else place(think,dest);}
+    const pr=12+5*Math.sin(now/170), po=(.16+.1*Math.sin(now/170)).toFixed(3); [bpulse,fpulse].forEach(c=>{c.setAttribute("r",pr.toFixed(1));c.setAttribute("opacity",po);});
+    const dt=last==null?16:Math.min(50,now-last); last=now;
+    y+=(yTarget-y)*Math.min(1,dt/110); roll.style.transform=`translateY(${(-y).toFixed(1)}px)`;
+    if(f>=1){end(ph);ph=null;k++;}
+    raf=requestAnimationFrame(frame);
+  };
+  raf=requestAnimationFrame(frame);
+}
+(async()=>{await load();if(DATA.length){const q=new URLSearchParams(location.search).get("i");if(q!=null)sel.value=q;start();}})();
+</script>
+
+</body></html>

@@ -134,6 +134,9 @@ proxy's `calls.jsonl`, any OpenAI-style messages list) into the judge's JSONL an
 upload that to a public Hugging Face dataset and send us its name; we run the judge. The page's
 [skill.md](https://agenteconomics.org/posts/how-agents-waste-money/skill.md) tells your own coding agent how to do all of that for you. The first
 version lists results for the paper's four benchmarks; more to come.
+When the labeled trajectories come back, `LLMaJ/scripts_walkthrough.py` replays them as the project
+page's walkthrough: the transcript with every removable span highlighted, the floor plan of the task
+with the agent's route, and the token curves, in one `index.html` that opens from disk.
 
 ## Notes That Save a Wasted Run
 
