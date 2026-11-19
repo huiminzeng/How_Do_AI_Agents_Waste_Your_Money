@@ -1,14 +1,17 @@
 ---
 name: llmaj-token-waste
-description: Prepare an AI agent's trajectories for LLMaJ, the token-waste judge of the paper "How Do AI Agents Waste Your Money?", upload them to Hugging Face, and submit them for judging. Use when a user wants to know how much of their agent's output is waste.
+description: Prepare an AI agent's trajectories for LLMaJ, the token-waste judge of the paper "How Do AI Agents Waste Your Money?": find them, convert them to the judge's format, check them, and get them ready for the user to submit. Use when a user wants to know how much of their agent's output is waste.
 ---
 
 # Send your agent's trajectories to LLMaJ
 
 You are reading this on behalf of a user who ran an AI agent and wants to know how much of
 its output was waste. Your job: find their trajectories, convert them to the judge's format,
-check them, upload them to a Hugging Face dataset under the user's account, and give the user
-the message that submits them. Nothing in this document runs the judge; we run it.
+check them, and leave the user with exactly what they need to submit on the project's page.
+Nothing in this document runs the judge; we run it.
+
+**You do not submit for the user.** Submitting means agreeing to terms about their data and
+answering a captcha, on https://agenteconomics.org/posts/how-agents-waste-money/play. That is theirs to do. You prepare; they submit.
 
 ## What this is
 
@@ -24,13 +27,26 @@ Code: https://github.com/huiminzeng/How_Do_AI_Agents_Waste_Your_Money. The paper
 
 ## The workflow
 
-1. **You** (the agent) convert the user's trajectories to the judge's JSONL, check them, and
-   upload them to a public Hugging Face dataset under the user's account.
-2. **The user** sends us the dataset name (by email, or in a Discussion on our dataset page).
-3. **We** run LLMaJ on it and send back the labeled trajectories (every span the judge marked,
-   with its kind and reason) and the numbers: waste ratio, strict waste ratio, and the share by
-   kind. **You** then replay the labeled trajectories as the walkthrough page (step 5). If the trajectories are from one of the supported benchmarks, the result is also
-   listed on the project page's community table, as reported, under the user's name.
+1. **You** (the agent) find the user's trajectories, convert them to the judge's JSONL and check them.
+2. **You** count them. Up to 5 trajectories: the user uploads the file on the page. More than 5: you
+   upload them to a public Hugging Face dataset under the user's account, and the user gives the
+   page its name.
+3. **The user** submits on https://agenteconomics.org/posts/how-agents-waste-money/play: they read the terms and agree to them.
+4. **We** run LLMaJ. The page gives the user a private link the moment they submit; it shows
+   where the request stands, and then their results page: every trajectory
+   replayed turn by turn with the spans the judge marked, the numbers (waste ratio, strict waste
+   ratio, success rate), and a download of the labeled trajectories.
+
+## Limits
+
+- **32 trajectories per person**, in total, and 3 million characters in total. Tell the user if they
+  have more, and ask which to send.
+- **One trajectory is one run of one task**: at most 100 turns and 500,000 characters (the system
+  prompt plus, per turn, what it received, its reasoning, its reply and its tool calls). A longer run
+  is refused; do not split it, cut it, or join several runs into one.
+- **5 trajectories** in one upload from the page; more go through a Hugging Face dataset.
+- **One model per request.** Trajectories of two models are two requests.
+- Results are kept for **30 days**, then deleted.
 
 ## Supported benchmarks (v1)
 
@@ -43,9 +59,8 @@ The first version judges trajectories from the four benchmarks of the paper:
 | SWE-bench Verified | `swe_verified` | `all` |
 | MCP-Atlas | `mcp_atlas` | `all` |
 
-Other benchmarks and task sets: more to come. You may still convert and upload them (use your
-own `benchmark` name), and say so in the message; they will be judged when their deliverable
-sentence is in place.
+Other benchmarks and task sets: more to come. For now a request with another `benchmark` value is
+refused when it is submitted, so tell the user rather than preparing one.
 
 ## Step 1: find the trajectories
 
@@ -135,7 +150,9 @@ Each turn needs at least one of `reasoning`, `visible` or `tool_calls`. Do not p
 conversation history into every turn: `received` is only what arrived since the previous turn.
 `benchmark` and `domain` never contain a dash; the dash is only in the file name.
 
-## Step 3: upload to Hugging Face
+## Step 3: more than 5 trajectories? Upload to Hugging Face
+
+Skip this step when there are 5 or fewer: the user uploads the JSONL file on the page.
 
 The dataset is the user's: public, under their account, one dataset per model, one file per
 benchmark named `<benchmark>.jsonl` (for τ², `tau2-retail.jsonl` / `tau2-airline.jsonl`).
@@ -158,34 +175,43 @@ simulator's provider key and the agent's proxy key and address; other harness lo
 theirs. The converter refuses to write an output that still contains a key, and the converted
 files are what goes up.
 
-## Step 4: tell us
+## Step 4: hand over to the user
 
-Give the user this message to send, filled in:
+Tell the user, in these words or close to them:
 
-```
-Subject: LLMaJ submission: <model> on <benchmark>
+- **5 trajectories or fewer:** "Your trajectories are ready in `<path to the .jsonl>`. Open
+  https://agenteconomics.org/posts/how-agents-waste-money/play, choose *upload them here*, and pick that file."
+- **More than 5:** "Your trajectories are in the dataset
+  `https://huggingface.co/datasets/<user>/<dataset-name>`. Open https://agenteconomics.org/posts/how-agents-waste-money/play, choose *a Hugging Face
+  dataset*, and paste that address."
 
-Dataset: https://huggingface.co/datasets/<user>/<dataset-name>
-Model: <model name>          Harness: <the harness, or "native">
-Benchmark: <benchmark>       Tasks: <how many>, <task sample, e.g. the paper's 100 or all>
-Grades: <where the success rate comes from: "solved" in the file / attached report / none>
-Name to list: <how the user wants to be credited; their Hugging Face username if you cannot ask>
-```
+Then tell them what the page will ask, so nothing surprises them: an email address (it counts
+their trajectories against the per-person limit; nothing is emailed to it); terms to read and agree to (their trajectories' text is sent to the judge model, a third
+party; the results page is unlisted but anyone with its link can open it; everything is deleted
+after 30 days); and one optional permission (use of the trajectories for research).
 
-Send it to huiminz3@illinois.edu and lu.yuxuan@northeastern.edu, or post it as a Discussion on
-https://huggingface.co/datasets/huiminz3/How_Do_AI_Agents_Waste_Your_Money.
+Also tell them how many trajectories there are, which model and benchmark, and anything the
+converter's `note` lines said the judge will not be able to see.
 
 ## What comes back
 
-The labeled trajectories (the same JSONL, each turn with the judge's spans, their kinds and
-reasons, and what the judge kept), the per-trajectory and per-cell numbers, and a line in the
-community table for supported benchmarks. Judging takes a few minutes per trajectory on our
-side; expect an answer within days, not minutes.
+A private link, shown on the page the moment the user submits. Nothing is emailed, so tell them
+to save it. It first shows where the request stands, then the results: each trajectory replayed turn
+by turn: the transcript with every removable span highlighted and the judge's reason for it,
+the task as a floor plan, the type of each action and each step of reasoning, and the token
+curves. Its download button gives the labeled trajectories: the same JSONL, each turn with the
+judge's spans, their kinds and reasons, and what the judge kept, plus the per-cell numbers.
 
-## Step 5: replay the result as a walkthrough
+Judging takes a few minutes per trajectory and requests are judged in the order they
+arrive, so expect results within hours, not minutes. Results submitted this way are a
+sample and are not listed in the community table on the project page. That table is for complete
+benchmark runs, which are requested with a pull request instead: see
+https://github.com/huiminzeng/How_Do_AI_Agents_Waste_Your_Money/blob/main/community/README.md.
 
-When the labeled file arrives, turn it into the walkthrough shown on the project page, so the
-user can watch their agent walk the task with every removable span highlighted:
+## Step 5 (optional): replay the result on the user's own machine
+
+The results page already shows the walkthrough. If the user wants it locally, or after the 30
+days are over, build it from the labeled file they downloaded:
 
 ```bash
 cd How_Do_AI_Agents_Waste_Your_Money/LLMaJ
@@ -199,7 +225,11 @@ knows the four supported benchmarks; another benchmark gets a generic plan.
 
 ## Rules
 
-- Upload only converted JSONL, never raw logs (they may contain keys and other secrets).
+- Do not submit on the user's behalf, and do not agree to the terms for them.
+- Upload only converted JSONL, never raw logs (they may contain keys and other secrets). A file
+  that still contains an API key is refused.
+- No personal information about other people in what is submitted. If the trajectories contain
+  some (real names, addresses, account details of real customers), tell the user before they submit.
 - One run per task: if the agent ran a task several times, keep one trial per task (the τ²-bench
   converter keeps the first and says so; for other sources, pick one and say which).
 - Keep the agent's text complete and unedited: a trimmed trajectory judges as less wasteful than

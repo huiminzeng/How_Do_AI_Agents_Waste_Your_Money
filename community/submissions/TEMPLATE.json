@@ -1,0 +1,15 @@
+{
+  "model": "",
+  "model_organization": "",
+  "submitting_organization": "",
+  "harness": "native",
+  "benchmark": "",
+  "domain": "all",
+  "task_set": "",
+  "trajectories": 0,
+  "dataset": "https://huggingface.co/datasets/<user>/<name>",
+  "dataset_revision": "",
+  "submission_date": "",
+  "references": [],
+  "notes": ""
+}

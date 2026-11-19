@@ -131,9 +131,13 @@ Send us your agent's trajectories and get them back with every removable span ma
 waste ratio. The [project page](https://agenteconomics.org/posts/how-agents-waste-money/play) has the workflow: `LLMaJ/scripts_convert_trajectories.py`
 turns the logs you already have (τ²-bench `results.json`, mini-swe-agent `.traj.json`, this
 proxy's `calls.jsonl`, any OpenAI-style messages list) into the judge's JSONL and checks it; you
-upload that to a public Hugging Face dataset and send us its name; we run the judge. The page's
+submit it on the page (up to 5 trajectories directly, more through a public Hugging Face dataset)
+and get a private page with the results; we run the judge. The page's
 [skill.md](https://agenteconomics.org/posts/how-agents-waste-money/skill.md) tells your own coding agent how to do all of that for you. The first
-version lists results for the paper's four benchmarks; more to come.
+version judges the paper's four benchmarks; more to come.
+To have a complete benchmark run listed in the project page's community table, open a pull request
+that adds one small file to [community/](community/README.md): it asks us to evaluate the run and
+says where the trajectories are. The trajectories stay in your own Hugging Face dataset.
 When the labeled trajectories come back, `LLMaJ/scripts_walkthrough.py` replays them as the project
 page's walkthrough: the transcript with every removable span highlighted, the floor plan of the task
 with the agent's route, and the token curves, in one `index.html` that opens from disk.

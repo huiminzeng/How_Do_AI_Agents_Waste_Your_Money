@@ -6,10 +6,10 @@ to send us anything.
 
 Two ways to get the labeled trajectories:
 
-- **Send them to us.** Convert your logs to the judge's format (steps 1-3), upload them to a
-  public Hugging Face dataset under your account (step 4), send us the dataset name (step 5).
-  We run LLMaJ and send back the labeled trajectories and the numbers; results on the paper's
-  four benchmarks are listed on the project page's community table.
+- **Send them to us.** Convert your logs to the judge's format (steps 1-3) and submit them on
+  the project page (step 5): up to 5 trajectories are uploaded there directly, more go through a
+  public Hugging Face dataset under your account (step 4). We run LLMaJ, and you get a private
+  page with the labeled trajectories and the numbers.
 - **Run the judge locally** (step 6). Same converted file, your own judge key, nothing leaves
   your machine.
 
@@ -129,9 +129,9 @@ One JSON object per line, one trajectory per object:
 
 Each turn needs at least one of `reasoning`, `visible` or `tool_calls`.
 
-## 4. Upload to Hugging Face
+## 4. More than 5 trajectories: upload to Hugging Face
 
-One dataset per model, public, under your account; one file per benchmark, named as in step 2.
+With 5 or fewer, skip this step: the page takes the file itself. Otherwise: one dataset per model, public, under your account; one file per benchmark, named as in step 2.
 
 ```bash
 hf auth login                                                  # your token, write access
@@ -148,24 +148,32 @@ and lists the files.
 Upload only the converted JSONL, never the raw log: τ²-bench's `results.json` carries the user
 simulator's provider key and the agent's proxy key, and other harness logs may carry theirs.
 
-## 5. Tell us
+## 5. Submit on the project page
 
-Email huiminz3@illinois.edu and lu.yuxuan@northeastern.edu, or post a Discussion on
-https://huggingface.co/datasets/huiminz3/How_Do_AI_Agents_Waste_Your_Money:
+Open https://agenteconomics.org/posts/how-agents-waste-money/play and submit there:
 
-```
-Subject: LLMaJ submission: <model> on <benchmark>
+- **5 trajectories or fewer:** choose *upload them here* and pick your converted `.jsonl`. It is
+  checked in your browser, then sent. You can skip step 4.
+- **More than 5:** choose *a Hugging Face dataset* and paste the dataset's address from step 4.
 
-Dataset: https://huggingface.co/datasets/<user>/<dataset-name>
-Model: <model name>          Harness: <the harness, or "native">
-Benchmark: <benchmark>       Tasks: <how many>, <task sample, e.g. the paper's 100 or all>
-Grades: <where the success rate comes from: "solved" in the file / attached report / none>
-Name to list: <how you want to be credited>
-```
+The page asks for your email address (it counts your trajectories against the limit below;
+nothing is emailed to it) and shows the terms: what is collected, that the text of your
+trajectories is sent to the judge model, that everything is deleted after 30 days. You agree,
+answer a captcha, and submit.
 
-You get back the labeled trajectories (the same JSONL, each turn with the judge's spans, their
-kinds and reasons, and what the judge kept) and the numbers: waste ratio, strict waste ratio,
-share by kind, per trajectory and for the set. Expect days, not minutes.
+You are given a private link at once. It shows where your request stands and then your results:
+each trajectory replayed turn by turn with every removable span highlighted and the judge's
+reason for it, the numbers (waste ratio, strict waste ratio, success rate), and a download of the
+labeled trajectories (the same JSONL, each turn with the judge's spans, their kinds and reasons,
+and what the judge kept). Save the link: it is not emailed, and it is the only way to the
+results. Requests are judged in the order they arrive, a few minutes per trajectory.
+
+Limits: 32 trajectories and 3 million characters per person; 5 trajectories per upload from the
+page; one model per request; one trajectory is one run of one task, at most 100 turns and 500,000
+characters. A file that contains an API key is refused.
+
+What you submit this way is a sample and is not listed anywhere. To have a **complete benchmark
+run** listed in the project page's community table, see [community/README.md](../community/README.md).
 
 ## 6. Or run the judge yourself
 
